@@ -223,9 +223,10 @@ v10 刻意不包含以下内容，它们属于后续版本的工作：
 
 ```
 learn_lean/
-├── CLAUDE.md              # 项目约定（长期稳定）
-├── README.md              # 项目主页
+├── CLAUDE.md              # 项目身份 + 文档系统索引（几乎不改）
+├── STYLE.md               # 风格约定（偶尔修改）
 ├── PROGRESS.md            # 本文档——进展报告（经常更新）
+├── README.md              # 项目主页
 └── docs/
     ├── README.md          # 版本文档导航
     ├── lean_model_v0.md   # v0: 最小依赖类型核

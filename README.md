@@ -2,32 +2,15 @@
 
 Building a Lean-style dependently-typed kernel from scratch — formal model + code implementation.
 
-## Structure
+## Docs
 
-```
-learn_lean/
-├── README.md              # You are here
-├── PROGRESS.md            # Progress report: evolution, design decisions, architecture overview
-└── docs/
-    ├── README.md          # Version document navigation guide
-    ├── lean_model_v0.md   # Minimal dependent type kernel
-    ├── lean_model_v1.md   # + Σ, Pair
-    ├── lean_model_v2.md   # + Fst, Snd
-    ├── lean_model_v3.md   # + Ann (elaboration hint)
-    ├── lean_model_v4.md   # + whnf
-    ├── lean_model_v5.md   # + defeq
-    ├── lean_model_v6.md   # + Surface/Core split, elab
-    ├── lean_model_v7.md   # + Proj, StructureInfo, Sigma desugared
-    ├── lean_model_v8.md   # + ParamInfo, FieldInfo, helper functions
-    ├── lean_model_v9.md   # + StructureCmd, all structures user-declared
-    └── lean_model_v10.md  # + ProjectionInfo, SProj, SDot (latest)
-```
-
-## Quick Links
-
-- **[PROGRESS.md](PROGRESS.md)** — Read this first for an overview of the modeling journey,  key design decisions, and current architecture.
-- **[docs/README.md](docs/README.md)** — Reading guide for the version documents.
-- **[docs/lean_model_v10.md](docs/lean_model_v10.md)** — The latest and most complete model.
+| 文档 | 说明 |
+|------|------|
+| [CLAUDE.md](CLAUDE.md) | 项目身份 + 文档系统索引 |
+| [STYLE.md](STYLE.md) | 风格约定 |
+| [PROGRESS.md](PROGRESS.md) | 进展报告、设计决策、架构概述 |
+| [docs/README.md](docs/README.md) | 版本文档导航 |
+| [docs/lean_model_v10.md](docs/lean_model_v10.md) | 当前最新模型 |
 
 ## What's In Each Version
 
