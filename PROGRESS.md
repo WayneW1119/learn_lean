@@ -1,10 +1,23 @@
-# Progress Report: Building a Lean-Style Kernel from Scratch
+# Progress Report
 
-## 动机
+> 本文档经常更新。长期稳定的项目约定见 [CLAUDE.md](CLAUDE.md)。
 
-这个项目的目标是**从零开始建立一个精简的 Lean 风格依赖类型核**——通过一步步构建 term、typing、equality、elaboration 和结构定义机制，理解现代定理证明器的内部工作原理。
+## 在整体计划中的位置
 
-核心理念：**每个版本只关注相对上一版本的变化**。这样每个版本的 diff 都很小，容易阅读。本文档回顾 v0 到 v10 的演化路径，总结关键设计决策和遗留边界。
+这个仓库的总目标是：**学习 Lean + 类型论 + 用 Lean 做数学证明**。
+
+```
+总目标：学习 Lean + 类型论 + 用 Lean 做数学证明
+├── 子目标 1：内核建模（← 你在这里）
+│   └── 从零建模 Lean 风格内核，逐版迭代 (v0→v10→...)
+├── 子目标 2：类型论基础
+├── 子目标 3：Lean 实操
+└── 子目标 4：数学证明
+```
+
+当前处于**子目标 1（内核建模）**阶段。这个阶段的目的是通过建模理解定理证明器的内部工作原理，为后续实操和证明打下理论基础。不追求实现一个真正的 proof assistant。
+
+核心理念：**每个版本只关注相对上一版本的变化**。每个版本的 diff 都很小，容易阅读。
 
 ---
 
@@ -184,25 +197,48 @@ v10 刻意不包含以下内容，它们属于后续版本的工作：
 
 ---
 
+## 下一步
+
+当前阶段（内核建模）可能继续的方向：
+
+### v11 候选主题
+- **Method B**：投影名作为全局常量进入 Axioms，有类型和 reduction rule。需要先完善 DefCmd 的 whnf reduction
+- **InductiveCmd**：归纳类型的声明命令，包括 recursor 自动生成
+- **de Bruijn indices**：用 de Bruijn indices 替换 named representation，更接近真实 Lean 实现
+- **eta 规则**：Π 和 Σ 的 eta 等价
+- **universe polymorphism**：Level 参数化
+
+### 从建模到实操
+- 在 Lean 中实现模型的某些部分
+- 用 Lean 写类型检查器或 whnf/normalizer
+- 学习 Lean 标准库中 `Expr`、`Lean.Meta` 等的实际实现
+
+### 文档改进
+- 为每个版本补充更多直观图示
+- 添加常见问题的 FAQ
+
+---
+
 ## 文件组织
 
 ```
 learn_lean/
-├── README.md              # 项目概述
-├── PROGRESS.md            # 本文档——进展报告
+├── CLAUDE.md              # 项目约定（长期稳定）
+├── README.md              # 项目主页
+├── PROGRESS.md            # 本文档——进展报告（经常更新）
 └── docs/
     ├── README.md          # 版本文档导航
-    ├── lean_model_v0.md   # 最小依赖类型核
-    ├── lean_model_v1.md   # + Σ, Pair
-    ├── lean_model_v2.md   # + Fst, Snd
-    ├── lean_model_v3.md   # + Ann (elaboration hint)
-    ├── lean_model_v4.md   # + whnf
-    ├── lean_model_v5.md   # + defeq
-    ├── lean_model_v6.md   # + Surface/Core 分层, elab
-    ├── lean_model_v7.md   # + Proj, StructureInfo, Sigma 去特殊化
-    ├── lean_model_v8.md   # + ParamInfo, FieldInfo, 辅助函数
-    ├── lean_model_v9.md   # + StructureCmd, 类型生成辅助函数
-    └── lean_model_v10.md  # + ProjectionInfo, SProj, SDot (当前最新)
+    ├── lean_model_v0.md   # v0: 最小依赖类型核
+    ├── lean_model_v1.md   # v1: + Σ, Pair
+    ├── lean_model_v2.md   # v2: + Fst, Snd
+    ├── lean_model_v3.md   # v3: + Ann
+    ├── lean_model_v4.md   # v4: + whnf
+    ├── lean_model_v5.md   # v5: + defeq
+    ├── lean_model_v6.md   # v6: Surface/Core 分层, elab
+    ├── lean_model_v7.md   # v7: Proj, StructureInfo, Sigma 去特殊化
+    ├── lean_model_v8.md   # v8: ParamInfo, FieldInfo, 辅助函数
+    ├── lean_model_v9.md   # v9: StructureCmd, 类型生成辅助函数
+    └── lean_model_v10.md  # v10: ProjectionInfo, SProj, SDot (最新)
 ```
 
 ---
