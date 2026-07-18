@@ -1,5 +1,8 @@
-# Lean Kernel Model
+# Learn Lean
 
+Building a Lean-style kernel from scratch — formal model + code implementation.
+
+## [Docs](docs/)
 Versioned documents modeling the Lean kernel and elaboration layer, from v0 to v10.
 
 Each version builds on the previous one, progressively adding features:
