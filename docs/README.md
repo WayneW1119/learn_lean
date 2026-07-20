@@ -1,12 +1,12 @@
 # Version Documents
 
-每个版本文档的阅读指南。版本号越大越新，v10 是当前最新版本。
+每个版本文档的阅读指南。版本号越大越新，v11 是当前最新版本。
 
 ## 阅读顺序
 
 如果你是从头开始了解这个模型，推荐按版本顺序阅读：
 
-1. **[v0](lean_model_v0.md)** — 起点：最小依赖类型核。定义了 `Term`、`State`、`Context`、`infer_type`、`check_type`。适合理解基础约定和记号。
+1. **[v0](lean_model_v0.md)** — 起点：最小依赖类型核。定义了 `Term`、`State`、`Context`、`infer_type`、`check_type`。
 
 2. **[v1](lean_model_v1.md)** — 引入 Sigma（依赖乘积）和 Pair。bidirectional typing 升级。
 
@@ -26,7 +26,9 @@
 
 10. **[v9](lean_model_v9.md)** — `StructureCmd`——用户通过命令声明结构。不再预置任何结构。
 
-11. **[v10](lean_model_v10.md)** — `ProjectionInfo` + `SProj` + `SDot`。投影名和 dot notation。当前最新。
+11. **[v10](lean_model_v10.md)** — `ProjectionInfo` + `SProj` + `SDot`。投影名和 dot notation。
+
+12. **[v11](lean_model_v11.md)** — `InductiveCmd` + `Bool.rec` + iota reduction。最简单的 inductive 类型（nullary constructors）。当前最新。
 
 ## 关于版本差异标记
 
