@@ -321,6 +321,8 @@ InductiveInfo(
 )
 ```
 
+注意：`ConstructorInfo.name` 是完整全局名字（如 `Bool.false`，由 `typeName + "." + decl.name` 拼接），不是用户提供的短名字（`false`）。用户写在 `ConstructorDecl` 中的是短名字，`exec` 拼接为完整全局名字。
+
 ### 5.1f `RecursorInfo`                                              【v11 新增】
 
 ```text
@@ -454,60 +456,50 @@ make_motive_type(InductiveInfo(Bool, [...], Bool.rec))
 def make_recursor_type(info : InductiveInfo) -> CoreTerm:
     '''
     从 InductiveInfo 生成 recursor 的完整类型。
-    对每个 constructor_i，生成一个 case_i 前提，类型为 motive 应用到 constructor_i 的参数。
-    v11 第一版：所有 constructors 都是 nullary，因此 case_i 的类型 = motive (Const constructor_i)。
-    '''
-    motive = make_motive_type(info)
-    b = fresh_local_name(set())  # target binder 名
+    v11 第一版：只支持 nullary constructors。
 
-    telescope = [(b, Const(info.typeName))]  # target : typeName
-
-    for ctor in info.constructors:
-        # v11 第一版：所有 constructors 都是 nullary
-        # case_i : motive (Const ctor_i)
-        case_type = App(motive, Const(ctor.name))
-        telescope.append((ctor.name, case_type))
-
-    # body = motive b
-    body = App(motive, Var(b))
-
-    return make_forall_chain([(b, Const(info.typeName))] +
-                              [(ctor.name, App(motive, Const(ctor.name))) for ctor in info.constructors],
-                              body)
-```
-
-等一下——这个实现有问题。motive 类型本身有自己的 binder（`Π (_ : typeName), Sort 0`），在 telescope 中不需要再次绑定。让我重新写：
-
-```python
-# 写作 make_recursor_type(info)
-def make_recursor_type(info : InductiveInfo) -> CoreTerm:
-    '''
-    从 InductiveInfo 生成 recursor 的完整类型。
     格式：
-      Π (motive : Π (_ : typeName), Sort 0),
-      Π (case_ctor1 : motive ctor1),
-      Π (case_ctor2 : motive ctor2),
+      Π (motive : Π (_ : T), Sort 0),
+      Π (case₁ : motive ctor₁),
+      Π (case₂ : motive ctor₂),
       ...
-      Π (b : typeName),
-        motive b
+      Π (target : T),
+        motive target
+
+    其中 case₁, case₂, ... 是自动生成的不重复局部名字。
     '''
-    # motive binder
-    x = fresh_local_name(set())
-    motive_type = Forall(x, Const(info.typeName), Sort(level 0))
 
-    # target binder name
-    b = fresh_local_name({x})
+    motiveName = fresh_local_name(set())
+    motiveArg  = fresh_local_name({motiveName})
+    targetName = fresh_local_name({motiveName, motiveArg})
 
-    telescope = [(x, motive_type)]  # motive : Π (_ : typeName), Sort 0
+    # motive : Π (_ : T), Sort 0
+    motive_type = Forall(
+        motiveArg,
+        Const(info.typeName),
+        Sort(level 0)
+    )
 
-    # 为每个 constructor 生成一个 case
+    telescope = [
+        Pair(motiveName, motive_type)
+    ]
+
+    used = {motiveName, motiveArg, targetName}
+
+    # 为每个 constructor 生成一个 case binder（局部名字）
     for ctor in info.constructors:
-        # case_ctor_i : motive ctor_i（nullary constructor 的特例）
-        case_type = App(Var(x), Const(ctor.name))
-        telescope.append((ctor.name, case_type))
+        caseName = fresh_local_name(used)
+        used.add(caseName)
 
-    # 最后是 target : typeName，body 是 motive b
-    body = App(Var(x), Var(b))
+        # case_i : motive ctor_i（nullary constructor 的特例）
+        case_type = App(Var(motiveName), Const(ctor.name))
+        telescope.append(Pair(caseName, case_type))
+
+    # target : T
+    telescope.append(Pair(targetName, Const(info.typeName)))
+
+    # body = motive target
+    body = App(Var(motiveName), Var(targetName))
 
     return make_forall_chain(telescope, body)
 ```
@@ -515,21 +507,22 @@ def make_recursor_type(info : InductiveInfo) -> CoreTerm:
 **例子：** 对于 Bool：
 
 ```text
-make_recursor_type(InductiveInfo(Bool, [false, true], Bool.rec))
+make_recursor_type(InductiveInfo(Bool, [
+    ConstructorInfo(Bool.false, []),
+    ConstructorInfo(Bool.true, [])
+  ], Bool.rec))
 ```
 
-telescope = `[(motive, Π (_ : Bool), Sort 0), (false, motive Bool.false), (true, motive Bool.true), (b, Bool)]`
+motiveName = fresh（例如 `m`），motiveArg = fresh（例如 `_x`），targetName = fresh（例如 `b`），case₁ = fresh（例如 `c₁`），case₂ = fresh（例如 `c₂`）。
 
-body = `motive b`
-
-展开：
+生成的类型：
 
 ```text
-Π (motive : Π (_ : Bool), Sort 0),
-Π (false : motive Bool.false),
-Π (true : motive Bool.true),
+Π (m : Π (_x : Bool), Sort 0),
+Π (c₁ : m Bool.false),
+Π (c₂ : m Bool.true),
 Π (b : Bool),
-  motive b
+  m b
 ```
 
 **也就是：**
@@ -542,6 +535,8 @@ Bool.rec :
   Π (b : Bool),
     motive b
 ```
+
+其中 case binder 名 `case_false` / `case_true` 由 `fresh_local_name` 自动生成（不与 motive、motiveArg、targetName 冲突），**不是**构造子全局名 `Bool.false` / `Bool.true`。
 
 这与预期的 Bool.rec 类型完全一致 ✓
 
@@ -634,7 +629,7 @@ typeName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Proje
 
 **第一步：名字检查** — `typeName` 不与已有名字冲突。构造子名拼接为 `typeName + "." + constructorDecl.name` 后也不与已有名字冲突。recursor 名 `typeName + "." + "rec"` 也不与已有名字冲突。
 
-**第二步：Telescope 检查** — 逐个 elaborate 构造子的参数类型（v11 第一版为空，所以这一步直接通过）。在后续版本中（如 Nat），此处会对每个构造子的参数类型做与 StructureCmd 类似的 telescope 检查。
+**第二步：Telescope 检查** — v11 第一版只支持 nullary constructors（无参数）。对每个 constructor，检查 `args` 是否为空，非空则直接报错。在后续版本中（如 Nat），此处会对每个构造子的参数类型做与 StructureCmd 类似的 telescope 检查。
 
 **第三步：类型生成** — 构建 `InductiveInfo`，然后调用 `make_recursor_type`（§5c），将生成的结果作为 recursor 的类型。
 
@@ -660,14 +655,11 @@ rec_info = RecursorInfo(recursor_name, typeName, ctor_infos)
 type_type = Sort(level 0)
 
 # 生成每个 constructor 的类型
-# v11 第一版：constructor 类型不依赖参数 → 直接是 typeName
+# v11 第一版：所有 constructors 都是 nullary → 类型直接是 typeName
 ctor_types = {}
 for ctor_info in ctor_infos:
-    if len(ctor_info.args) == 0:
-        ctor_types[ctor_info.name] = Const(typeName)
-    else:
-        # 以后版本：Π (args...), typeName
-        raise Error  # v11 不支持
+    # len(args) == 0 已在第二步检查中保证
+    ctor_types[ctor_info.name] = Const(typeName)
 
 # 验证 type_type 是 type
 whnf(S, infer_type(S, ∅, type_type)) 必须是 Sort u₁
@@ -702,32 +694,28 @@ elif isinstance(cmd, InductiveCmd):
     typeName, constructor_decls = cmd.args
 
     # 第一步：名字检查
-    if typeName in S.Axioms or typeName in S.Defs or typeName in S.Structures or typeName in S.Projections or typeName in S.Inductives:
+    if typeName in S.Axioms or typeName in S.Defs or typeName in S.Structures or typeName in S.Projections or typeName in S.Inductives or typeName in S.Recursors:
         raise Error            # typeName 不能与已有全局名字冲突
 
     recursor_name = typeName + "." + "rec"
-    if recursor_name in S.Axioms or recursor_name in S.Defs or recursor_name in S.Structures or recursor_name in S.Projections:
+    if recursor_name in S.Axioms or recursor_name in S.Defs or recursor_name in S.Structures or recursor_name in S.Projections or recursor_name in S.Inductives or recursor_name in S.Recursors:
         raise Error            # recursor 名不能与已有名字冲突
 
     ctor_names = []
     for decl in constructor_decls:
         ctor_full_name = typeName + "." + decl.name
-        if ctor_full_name in S.Axioms or ctor_full_name in S.Defs or ctor_full_name in S.Structures or ctor_full_name in S.Projections:
+        if ctor_full_name in S.Axioms or ctor_full_name in S.Defs or ctor_full_name in S.Structures or ctor_full_name in S.Projections or ctor_full_name in S.Inductives or ctor_full_name in S.Recursors:
             raise Error        # 构造子名不能与已有名字冲突
         if ctor_full_name in ctor_names:
             raise Error        # 构造子名不能重复
         ctor_names.append(ctor_full_name)
 
-    # 第二步：Telescope 检查（v11 第一版：args 为空）
+    # 第二步：Telescope 检查（v11 第一版：只支持 nullary constructors）
     ctor_infos = []
     for decl in constructor_decls:
-        arg_infos = []
-        Γ = Context(Types={})
-        for arg_name, arg_type_surf in decl.args:
-            arg_type_core = elab(S, Γ, arg_type_surf, None)
-            arg_infos.append(Pair(arg_name, arg_type_core))
-            Γ = expand_context(Γ, arg_name, arg_type_core)
-        ctor_infos.append(ConstructorInfo(typeName + "." + decl.name, arg_infos))
+        if len(decl.args) != 0:
+            raise Error        # v11 第一版：constructor 不能有参数
+        ctor_infos.append(ConstructorInfo(typeName + "." + decl.name, []))
 
     # 第三步：类型生成 + 验证
     info = InductiveInfo(typeName, ctor_infos, recursor_name)
@@ -779,8 +767,8 @@ elif isinstance(cmd, InductiveCmd):
 
 - `InductiveCmd` 是 State 生成器，不产生 CoreTerm。它修改 State（加 inductive type、constructors、recursor 的 axiom 声明，加 InductiveInfo 和 RecursorInfo），之后所有已有的 kernel 规则自动生效。
 - v11 第一版只支持 nullary constructors（无参数、无递归）。构造子的类型就是 `Const typeName`（裸 inductive 类型）。将来到 Nat 时，`succ` 的类型会是 `Π (n : Nat), Nat`。
-- recursor 的类型由 `make_recursor_type` 自动生成 — 对任何 InductiveInfo 都适用。
-- telescope 检查在 v11 第一版中为空操作（args 为空），但代码已预留了结构 — 将来只需去掉 `if len(args) > 0: raise Error` 即可启用。
+- recursor 的类型由 `make_recursor_type` 自动生成 — 对任何 InductiveInfo 都适用。生成的类型中，motive 名、motive 参数名、case binder 名、target 名都由 `fresh_local_name` 独立生成，互不冲突。
+- **名字冲突检查：** v11 的 State 已扩展为 6 个字段。`name_is_used` 辅助函数确保新名字不与 Axioms, Defs, Structures, Projections, Inductives, Recursors 中的任何已有名字冲突。注意：v10 的 `AxiomCmd`、`DefCmd`、`StructureCmd` 分支中的名字检查也需要相应扩展为 6 字段检查（这些分支的代码在 v10 文档 §7.5 中，v11 只列出新增的 InductiveCmd 分支）。
 
 ---
 ## 8–11. Context / HasType / FV / subst
@@ -805,7 +793,7 @@ whnf(S, (Const recName) motive case₁ ... caseₙ target)
       当 S.Recursors.get(recName) 提供了 RecursorInfo
         且 target whnf 后 = Const ctor_i
         且 ctor_i 是 RecursorInfo.constructors 中的第 i 个构造子
-        且 应用链的参数数量正确
+        且 应用链的参数数量 = 2 + num_ctors（motive + target + n 个 cases）
   = 不化简
       当不满足上述条件
 ```
@@ -826,8 +814,8 @@ if isinstance(t, App):
 
         # args 格式: [motive, case₁, case₂, ..., caseₙ, target]
         # 对 Bool: [motive, case_false, case_true, target]
-        num_constructors = len(rec_info.constructors)
-        expected_args = 2 + num_constructors  # motive + target + cases
+        num_ctors = len(rec_info.constructors)
+        expected_args = 2 + num_ctors  # motive + target + cases
 
         if len(args) != expected_args:
             return t  # 参数数量不对，不化简
@@ -878,7 +866,7 @@ if isinstance(t, App):
     if isinstance(head, Const) and head.args in S.Recursors:
         rec_info = S.Recursors.get(head.args)
         num_ctors = len(rec_info.constructors)
-        if len(args) == 1 + num_ctors:   # [motive, case₁, ..., caseₙ, target]
+        if len(args) == 2 + num_ctors:   # [motive, case₁, ..., caseₙ, target]
             target = args[-1]
             target_whnf = whnf(S, target)
 
@@ -896,7 +884,7 @@ if isinstance(t, App):
 - iota reduction 不硬编码任何特定 inductive 类型。它通过 `S.Recursors` 查找 recursor 对应的构造子列表，然后根据 target 是第几个构造子选择对应的 case。
 - 对于 Bool：`collect_app((Const Bool.rec) motive case_false case_true target)` → `(Const Bool.rec, [motive, case_false, case_true, target])`。`S.Recursors.get(Bool.rec)` → `RecursorInfo(Bool.rec, Bool, [false, true])`。如果 `target_whnf = Const Bool.false`（构造子列表第 0 个），则取出 `args[1 + 0] = case_false`。
 - iota reduction 检查 `target` 的 whnf 是否是 `Const`（即 constructor）。对于 nullary constructor（如 `Bool.false`），直接匹配 `Const Bool.false`。对于未来有参数的 constructor（如 `Nat.succ n`），`target_whnf` 的 head 需要是 `Const Nat.succ`，然后递归化简时需要把 constructor 的参数传递给 minor premise — 这留到后续版本处理。
-- `len(args) == 1 + num_ctors` 这个条件检查是否每个构造子有一个 case + motive 占一个位置。注意 iota reduction 要求 recursor **完全应用** — 如果少了某个 case，不化简。
+- `len(args) == 2 + num_ctors` 这个条件检查是否每个构造子有一个 case + motive 占一个位置。注意 iota reduction 要求 recursor **完全应用** — 如果少了某个 case，不化简。
 - 如果 target whnf 后不是已知 constructor（比如是一个变量），不化简 — 这和 `Proj` 规则的行为一致。
 
 ### 12.4 其他情况 → 12.5
@@ -936,7 +924,7 @@ def whnf(S : State, t : CoreTerm) -> CoreTerm:
         if isinstance(head, Const) and head.args in S.Recursors:
             rec_info = S.Recursors.get(head.args)
             num_ctors = len(rec_info.constructors)
-            if len(args) == 1 + num_ctors:  # [motive, case1, ..., caseN, target]
+            if len(args) == 2 + num_ctors:  # [motive, case1, ..., caseN, target]
                 target_whnf = whnf(S, args[-1])
                 if isinstance(target_whnf, Const):
                     for j, ctor_info in enumerate(rec_info.constructors):
@@ -1009,11 +997,17 @@ S_v11.Axioms 在 S.Axioms 基础上新增：
   Bool.rec   : ...（由 make_recursor_type 自动生成）
 
 S_v11.Inductives = {
-  Bool : InductiveInfo(Bool, [false, true], Bool.rec)
+  Bool : InductiveInfo(Bool, [
+    ConstructorInfo(Bool.false, []),
+    ConstructorInfo(Bool.true, [])
+  ], Bool.rec)
 }
 
 S_v11.Recursors = {
-  Bool.rec : RecursorInfo(Bool.rec, Bool, [false, true])
+  Bool.rec : RecursorInfo(Bool.rec, Bool, [
+    ConstructorInfo(Bool.false, []),
+    ConstructorInfo(Bool.true, [])
+  ])
 }
 ```
 
@@ -1059,8 +1053,14 @@ ctor_infos = [
   ConstructorInfo(Bool.true, [])
 ]
 
-info = InductiveInfo(Bool, [false, true], Bool.rec)
-rec_info = RecursorInfo(Bool.rec, Bool, [false, true])
+info = InductiveInfo(Bool, [
+    ConstructorInfo(Bool.false, []),
+    ConstructorInfo(Bool.true, [])
+  ], Bool.rec)
+rec_info = RecursorInfo(Bool.rec, Bool, [
+    ConstructorInfo(Bool.false, []),
+    ConstructorInfo(Bool.true, [])
+  ])
 ```
 
 `type_type = Sort(level 0)` → `Bool : Sort 0` ✓
