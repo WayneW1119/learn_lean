@@ -606,9 +606,21 @@ InductiveCmd Unit
 exec(S : State, cmd : Command) -> State
 ```
 
-### 7.1–7.3 AxiomCmd / DefCmd / StructureCmd
+### 7.1–7.3 AxiomCmd / DefCmd / StructureCmd                    【v11 修改】
 
-与 v10 完全相同（§7.2–§7.4）。此处不重复列出。
+与 v10 的 §7.2–§7.4 基本相同，但名字冲突检查升级为 v11 的 6 字段检查。
+
+**AxiomCmd** 的前置条件中，新名字 `n` 不得出现在六个字段中：
+
+```text
+n ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections) ∪ dom(S.Inductives) ∪ dom(S.Recursors)
+```
+
+**DefCmd** 的前置条件中，新名字 `n` 同样不得出现在六个字段中。
+
+**StructureCmd** 的前置条件中，`typeName`、`constructor`、以及自动生成的投影名均不得出现在六个字段中（v10 的 §7.4 已有 4 字段检查，v11 扩展为 6 字段检查）。
+
+完整代码与 v10 相同，仅将名字冲突检查从 4 字段扩展为 6 字段。此处不重复列出。
 
 ### 7.4 规则 3：执行 `StructureCmd`
 
@@ -620,14 +632,14 @@ exec(S : State, cmd : Command) -> State
 
 ```text
 cmd = InductiveCmd(typeName, constructor_decls)
-typeName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections) ∪ dom(S.Inductives)
+typeName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections) ∪ dom(S.Inductives) ∪ dom(S.Recursors)
 ```
 
-并要求：所有构造子的完整名字 `typeName + "." + constructorDecl.name` 互不相同，且不与已有全局名字冲突。
+并要求：所有构造子的完整名字 `typeName + "." + constructorDecl.name` 互不相同，且不能等于 `typeName` 或 `recursor_name`，且不与 State 六个名字空间中任何已有名字冲突。
 
 执行分四步：
 
-**第一步：名字检查** — `typeName` 不与已有名字冲突。构造子名拼接为 `typeName + "." + constructorDecl.name` 后也不与已有名字冲突。recursor 名 `typeName + "." + "rec"` 也不与已有名字冲突。
+**第一步：名字检查** — `typeName`、构造子完整名字、recursor 名均不与 State 的六个名字空间（Axioms、Defs、Structures、Projections、Inductives、Recursors）中的任何已有名字冲突。构造子名也不能等于 `typeName` 或 `recursor_name`。
 
 **第二步：Telescope 检查** — v11 第一版只支持 nullary constructors（无参数）。对每个 constructor，检查 `args` 是否为空，非空则直接报错。在后续版本中（如 Nat），此处会对每个构造子的参数类型做与 StructureCmd 类似的 telescope 检查。
 
@@ -704,6 +716,10 @@ elif isinstance(cmd, InductiveCmd):
     ctor_names = []
     for decl in constructor_decls:
         ctor_full_name = typeName + "." + decl.name
+        if ctor_full_name == typeName:
+            raise Error        # 构造子名不能等于 typeName
+        if ctor_full_name == recursor_name:
+            raise Error        # 构造子名不能等于 recursor 名
         if ctor_full_name in S.Axioms or ctor_full_name in S.Defs or ctor_full_name in S.Structures or ctor_full_name in S.Projections or ctor_full_name in S.Inductives or ctor_full_name in S.Recursors:
             raise Error        # 构造子名不能与已有名字冲突
         if ctor_full_name in ctor_names:
@@ -798,56 +814,7 @@ whnf(S, (Const recName) motive case₁ ... caseₙ target)
       当不满足上述条件
 ```
 
-```python
-if isinstance(t, App):
-    # ... 先检查 beta reduction（12.2）...
-
-    # 如果 beta reduction 不适用，检查是否是 recursor iota reduction
-    head_args = collect_app(t)
-    head, args = head_args.args
-
-    if isinstance(head, Const) and head.args in S.Recursors:
-        rec_info = S.Recursors.get(head.args)
-
-        if len(args) < 1:
-            return t  # 至少需要一个 target
-
-        # args 格式: [motive, case₁, case₂, ..., caseₙ, target]
-        # 对 Bool: [motive, case_false, case_true, target]
-        num_ctors = len(rec_info.constructors)
-        expected_args = 2 + num_ctors  # motive + target + cases
-
-        if len(args) != expected_args:
-            return t  # 参数数量不对，不化简
-
-        target = args[-1]
-        target_whnf = whnf(S, target)
-
-        if not isinstance(target_whnf, Const):
-            return t  # target 不是 constructor，不化简
-
-        ctor_name = target_whnf.args
-
-        # 找到对应的构造子在 constructors 列表中的位置
-        idx = None
-        for j, ctor_info in enumerate(rec_info.constructors):
-            if ctor_info.name == ctor_name:
-                idx = j
-                break
-
-        if idx is None:
-            return t  # ctor_name 不是这个 inductive 的构造子
-
-        # cases 在 args 中的位置：1 + idx（跳过 motive）
-        case_idx = 1 + idx
-        return whnf(S, args[case_idx])
-
-    return App(head, args[0]) if len(args) == 1 else t  # 处理一般 App
-```
-
-上面这个写法不太对——现有的 whnf 已经有一个 `App` 分支处理 beta reduction。合并后的逻辑应该是：在现有 `App` 分支中，beta reduction 检查在前，iota reduction 检查在后。
-
-更准确的写法——修改现有的 §12.2 `App` 分支，插入 iota reduction：
+在现有的 whnf `App` 分支中，beta reduction 检查在前，iota reduction 检查在后。修改 §12.2 的 App 分支，插入 iota reduction：
 
 ```python
 if isinstance(t, App):
