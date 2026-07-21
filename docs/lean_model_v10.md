@@ -89,7 +89,7 @@ def exec(S: State, cmd: Command) -> State:
   - `fst/snd` 不再是 core 构造子 — 它们是 `Proj(Sigma, 0/1, target)`。
   - 所有 kernel 函数（`infer_type`、`check_type`、`whnf`、`defeq`、`FV`、`subst`）只作用于 `CoreTerm`。
   - `elab` 函数负责把 `SurfaceTerm` 转换为 `CoreTerm`。
-- v10 新增 `ProjectionInfo`（§5.1b）和 `State.Projections`（§5.3）— StructureCmd 自动为每个字段生成投影名（如 `Sigma.a`、`Point.x`）。投影名用于 elaboration（§15a），不注册到 Axioms（Method A）。Kernel 规则无需修改。
+- v10 新增 `ProjectionInfo`（§5.1b）和 `State.Projections`（§5.3）— StructureCmd 自动为每个字段生成投影名（如 `qualified_name(Sigma, a)` 简写为 `Sigma.a`）。投影名用于 elaboration（§15a），不注册到 Axioms（Method A）。Kernel 规则无需修改。v10 新增 `qualified_name`（§2.4）用于形式化名字拼接。
 - v10 新增 `SProj` 和 `SDot`（§3）— 用户可以写 `Point.x p`（qualified projection）和 `p.x`（dot notation）。两者 elaborate 后变成 `Proj(structName, index, target_core)`。
 - `StructureCmd`（§6）让用户通过顶层命令声明新结构（包括 Sigma 和 Prod）。当前模型不预置任何结构 — 所有 StructureInfo 都通过 StructureCmd 生成。Kernel 规则无需修改即可处理新声明的结构。
 ---
@@ -149,6 +149,26 @@ def max_level(l1 : Level, l2 : Level) -> Level:
         return level max(m, n)
     raise Error            # 之后再补充
 ```
+
+### 2.4 `qualified_name` — 名字拼接操作                           【v10 新增】
+
+定义一个函数用于从父名字和子名字拼接出完整全局名字：
+
+```python
+# 写作 qualified_name(parent, child)
+def qualified_name(parent : GlobalName, child : LocalName) -> GlobalName:
+    '''
+    从 parent 和 child 拼出完整的全局名字。
+    要求 parent ≠ child。
+    对固定 parent，若 child₁ ≠ child₂，则 qualified_name(parent, child₁) ≠ qualified_name(parent, child₂)。
+    对固定 child，若 parent₁ ≠ parent₂，则 qualified_name(parent₁, child) ≠ qualified_name(parent₂, child)。
+    '''
+```
+
+此函数可以理解为在当前模型的 GlobalName 集合上的一个二元操作。底层实现可视为字符串拼接（`parent + "." + child`）或任意满足可区分性条件的映射。当前阶段不展开实现细节，只假定它满足上述性质。
+
+**简写约定：** 在例子和注释中，`qualified_name(Sigma, a)` 简写为 `Sigma.a`，`qualified_name(Point, x)` 简写为 `Point.x`，等。
+
 ---
 ## 3. `SurfaceTerm`                                             【v10 修改】
 
@@ -191,6 +211,8 @@ SDot(p, x)         → Proj(Point, 0, p_core)    (推断 p 的类型 → 查 Poi
 ```
 
 `SProj` 用投影名直接指明结构，`SDot` 用字段名需要类型推断才能确定结构。两者 elaborate 后都变成 `Proj(structName, index, target_core)` — 投影名属于 surface/elab 层，字段编号属于 core/kernel 层。
+
+**注意（Method A）：** `SProj(projectionName, target)` 是独立的 SurfaceTerm 构造子，**不是** `SApp(SConst projectionName, target)`。因为 projectionName 只存在于 `State.Projections` 中（elaboration 元数据），不是 `State.Axioms` 中的普通常量——所以 `Const projectionName` 不是合法的 CoreTerm。`projectionName target` 由 parser/elaborator 直接解析为 `SProj(projectionName, target)`，不经过函数应用。
 
 **评论（SFst/SSnd 与 SProj/SDot 的关系）：** `SFst(t)` 和 `SSnd(t)` 是 Sigma 的专属 surface 语法 — 它们硬编码引用 `Const Sigma`。`SProj(projectionName, t)` 和 `SDot(t, fieldName)` 是 v10 的通用投影语法 — 适用于所有通过 StructureCmd 声明的结构。两者可以共存：`SProj(Sigma.a, p)` 和 `SFst(p)` 都 elaborate 成 `Proj(Sigma, 0, p_core)`。`SDot(p, a)` 也 elaborate 成同一个结果（前提是推断出 `p` 的类型是 Sigma 应用）。
 
@@ -419,6 +441,22 @@ Point:
 1. 若投影名进入 Axioms，就需要为它定义类型（如 `Sigma.a : Π (A : Sort 0), Π (B : Π(x:A), Sort 0), Π (p : Sigma A B), A`）和 whnf reduction rule（如 `App(App(App(Const Sigma.a, A), B), p) ↦ Proj(Sigma, 0, p)`）。这需要修改 kernel 或先有 DefCmd，对 v10 太重了。
 2. Method A 下 `SProj(Sigma.a, p)` 直接 elaborate 成 `Proj(Sigma, 0, p_core)` — 不需要经过 Axioms 或 whnf。这更简洁，也符合"kernel 不变"的原则。
 3. Method B（投影名作为全局常量）是将来可以切换的方向。真实 Lean 中 projection 是有类型和 reduction rule 的全局常量。当模型引入 DefCmd 和更完整的 whnf 机制后，可以自然切换到 Method B。
+
+### 5.1c `ProjectionInfo` well-formedness invariant                    【v10 新增】
+
+`S.Projections` 中的每个 `ProjectionInfo` 必须满足以下条件：
+
+1. **投影名不与其他 State 字段冲突：** `projName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures)`。（注意 `projName` 在 `dom(S.Projections)` 中是允许的——它就是自己的 key。）
+
+2. **所属结构名已注册：** `structName ∈ dom(S.Structures)`。
+
+3. **字段下标合法：** `index < len(S.Structures[structName].fields)`。
+
+4. **命名一致性（自动命名规则）：** `projName = structName + "." + S.Structures[structName].fields[index].name`。注意：当前模型采用自动命名规则，投影名由 StructureCmd 自动拼接。将来若支持用户自定义投影名，此条件需要放宽。
+
+5. **投影名唯一：** `S.Projections` 中所有 ProjectionInfo 的 `projectionName` 互不相同。
+
+**评论：** 当前模型中所有 ProjectionInfo 都通过 `exec(StructureCmd)` 自动生成——投影名检查（§7.4）保证条件 1、结构名检查保证条件 2、字段下标由 enumerate 遍历保证条件 3、命名规则 `typeName + "." + field.name` 保证条件 4。没有 ProjectionInfo 是预置的，也没有 ProjectionInfo 可以脱离 StructureCmd 手动添加。
 
 ### 5.2 `StructureInfo`
 
@@ -986,15 +1024,11 @@ S' = State(
 ```text
 cmd = StructureCmd(typeName, constructor, param_decls, field_decls)
 typeName ≠ constructor
-typeName ∉ dom(S.Axioms)
-typeName ∉ dom(S.Defs)
-typeName ∉ dom(S.Structures)
-constructor ∉ dom(S.Axioms)
-constructor ∉ dom(S.Defs)
-constructor ∉ dom(S.Structures)
+typeName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections)
+constructor ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections)
 ```
 
-并要求：所有自动生成的投影名 `typeName + "." + fieldDecl.name` 互不相同，且不与已有全局名字冲突（即不在 `dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections)` 中）。v10 的命名规则：投影名 = typeName + "." + fieldName。
+并要求：所有自动生成的投影名 `qualified_name(typeName, fieldDecl.name)` 互不相同，且不与已有全局名字冲突（即不在 `dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections)` 中）。v10 的命名规则：投影名 = `qualified_name(typeName, fieldName)`。
 
 执行分五步：
 
@@ -1041,13 +1075,17 @@ constructor_type = make_constructor_type(info)
 whnf(S_tmp, infer_type(S_tmp, ∅, constructor_type)) 必须是 Sort u₂
 ```
 
-**第四步：ProjectionInfo 生成**（v10 新增）— 为每个字段自动生成 ProjectionInfo。
+**第四步：ProjectionInfo 生成**（v10 新增）— 为每个字段自动生成 ProjectionInfo。生成前增加额外检查：投影名不能等于 `typeName` 或 `constructor`，且本次生成的投影名之间不能重复。
 
 ```text
 projection_infos = []
 for j, field in enumerate(info.fields):
-    projName = typeName + "." + field.name      # 投影名 = typeName + "." + fieldName
-    # 检查 projName 不与已有名字冲突（已在第一步中检查）
+    projName = qualified_name(typeName, field.name)      # 投影名 = qualified_name(typeName, fieldName)
+    if projName == typeName or projName == constructor:
+        raise Error                             # 投影名不能与 typeName 或 constructor 相同
+    if projName in [pi[0] for pi in projection_infos]:
+        raise Error                             # 本次生成的投影名不能重复
+    # projName 与已有全局名字的冲突检查已在第一步完成
     projection_infos.append((projName, ProjectionInfo(projName, typeName, j)))
 ```
 
@@ -1073,7 +1111,7 @@ S' = State(
 - 字段类型的 elaboration 在包含所有参数的上下文中进行。例如 `b : B a` 中，`B` 和 `a` 都可以在上下文中找到 — `B` 是参数名（在前面的 Γ 扩展中加入），`a` 是前序字段名（在更前面的 Γ 扩展中加入）。这正是 telescope 的含义：参数和字段组成一个逐步扩展的上下文链。
 - `make_structure_type` 和 `make_constructor_type` 在 §5b 定义，只依赖 CoreTerm 和 StructureInfo。它们不调用 elab/whnf/infer_type。
 - 第三步新增对生成类型的验证：`type_type` 和 `constructor_type` 都必须通过 `infer_type` 检查（结果必须是 Sort）。`constructor_type` 的返回类型中引用 `Const typeName`，所以需要先临时将 `typeName` 加入状态，才能正确验证 `constructor_type`。这防止了 `make_constructor_type` 的潜在 bug 导致 ill-typed 的 constructor type 被写入 Axioms。
-- v10 第四步新增 ProjectionInfo 生成：为每个字段自动生成一个 ProjectionInfo，投影名 = typeName + "." + fieldName。这些 ProjectionInfo 存入 `S.Projections`，供 elab 的 `SProj` 和 `SDot` 分支查询。投影名不注册到 Axioms（Method A）— 它们是 elaboration 元数据，不是全局常量。
+- v10 第四步新增 ProjectionInfo 生成：为每个字段自动生成一个 ProjectionInfo，投影名 = `qualified_name(typeName, fieldName)`。这些 ProjectionInfo 存入 `S.Projections`，供 elab 的 `SProj` 和 `SDot` 分支查询。投影名不注册到 Axioms（Method A）— 它们是 elaboration 元数据，不是全局常量。
 
 ### 7.5 `exec` 完整代码                                         【v10 修改】
 
@@ -1133,7 +1171,11 @@ def exec(S: State, cmd: Command) -> State:
         # v10 新增：检查投影名不冲突
         projection_names = []
         for f_decl in field_decls:
-            projName = typeName + "." + f_decl.name
+            projName = qualified_name(typeName, f_decl.name)
+            if projName == typeName or projName == constructor:
+                raise Error                # 投影名不能等于 typeName 或 constructor
+            if projName in projection_names:
+                raise Error                # 本次生成的投影名不能重复
             if projName in S.Axioms or projName in S.Defs or projName in S.Structures or projName in S.Projections:
                 raise Error                # 投影名不能与已有全局名字冲突
             projection_names.append(projName)
@@ -1903,6 +1945,8 @@ def projection_type(S : State, Γ : Context, info : StructureInfo, index : Nat, 
     以及将来检查字段类型 well-formedness 时使用。
     '''
     if index >= len(info.fields):
+        raise Error
+    if len(params) != len(info.params):
         raise Error
     fieldType = info.fields[index].type
 
@@ -3720,12 +3764,12 @@ pair_prod = (Const Prod.mk) (Const Nat) (App(Const Pred, Const zero)) (Const zer
 
 展示 `SProj(projectionName, target)` 的 elaboration。
 
-**例子 1：** `SProj(Sigma.a, p_core)` — 用投影名访问 Sigma 的第一字段。
+**例子 1：** `SProj(Sigma.a, SVar p)` — 用投影名访问 Sigma 的第一字段。
 
-前提：`S` 是 §15 构建的状态，`p_core : Sigma (Const Nat) Bfun`（其中 `Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`）。
+前提：`S` 是 §15 构建的状态，`Γ = ∅, p : Sigma (Const Nat) Bfun`（其中 `Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`）。
 
 ```text
-elab(S, ∅, SProj(Sigma.a, SVar p), None)
+elab(S, Γ, SProj(Sigma.a, SVar p), None)
 ```
 
 匹配 `SProj` (§15a.10)：
@@ -3745,7 +3789,9 @@ elab(S, ∅, SProj(Sigma.a, SVar p), None)
 - `fields[0].type = Var A`，替换 `A → Const Nat` → `Const Nat`
 - 所以 `Proj(Sigma, 0, Var p) : Const Nat` ✓
 
-**例子 2：** `SProj(Sigma.b, p_core)` — 用投影名访问 Sigma 的第二字段（依值）。
+**例子 2：** `SProj(Sigma.b, SVar p)` — 用投影名访问 Sigma 的第二字段（依值）。
+
+延续例子 1 的 Γ（`Γ = ∅, p : Sigma (Const Nat) Bfun`）。
 
 ```text
 elab(S, Γ, SProj(Sigma.b, SVar p), None)
@@ -3761,14 +3807,15 @@ elab(S, Γ, SProj(Sigma.b, SVar p), None)
 
 结果：`SProj(Sigma.b, SVar p)` → `Proj(Sigma, 1, Var p)` ✓
 
-**验证：** `infer_type(S, Γ, Proj(Sigma, 1, Var p))` = `App(Bfun, Proj(Sigma, 0, Var p))` = `App(Const Pred, Var p)` ✓
+**验证：** `infer_type(S, Γ, Proj(Sigma, 1, Var p))` = `App(Bfun, Proj(Sigma, 0, Var p))`，其中 `Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`。该类型 beta-reduce 后为 `App(Const Pred, Proj(Sigma, 0, Var p))` ✓
+注意不能直接化简为 `App(Const Pred, Var p)` — `Var p` 的类型是 `Sigma (Const Nat) Bfun`，不是 `Const Nat`。只有当 p 是具体构造子项时，才能进一步由 `whnf` 化简 `Proj(Sigma, 0, p_core) → Const zero`
 
-**例子 3：** `SProj(Sigma.a, q_core)` — target 类型不匹配（错误情况）。
+**例子 3：** `SProj(Sigma.a, SVar q)` — target 类型不匹配（错误情况）。
 
-假设 `q_core : Prod (Const Nat) (Const Nat)`。
+假设 `Γ = ∅, q : Prod (Const Nat) (Const Nat)`。
 
 ```text
-elab(S, ∅, SProj(Sigma.a, SVar q), None)
+elab(S, Γ, SProj(Sigma.a, SVar q), None)
 ```
 
 1. `S.Projections.get(Sigma.a) = ProjectionInfo(Sigma.a, Sigma, 0)` → structName = Sigma
@@ -3855,7 +3902,7 @@ Command 构造子：AxiomCmd, DefCmd, StructureCmd
 
 State 字段：Axioms, Defs, Structures, Projections                                                 【v10 新增 Projections】
 
-函数：FV(CoreTerm), subst(CoreTerm), subst_many, exec, infer_type, check_type, whnf, defeq, elab, elab_raw, is_sigma_type, collect_app, match_structure_type, projection_type, make_forall_chain, make_type_app, make_structure_type, make_constructor_type
+函数：FV(CoreTerm), subst(CoreTerm), subst_many, exec, infer_type, check_type, whnf, defeq, elab, elab_raw, is_sigma_type, collect_app, match_structure_type, projection_type, make_forall_chain, make_type_app, make_structure_type, make_constructor_type, qualified_name
 ```
 
 类型系统特性：
