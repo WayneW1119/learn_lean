@@ -152,20 +152,17 @@ def max_level(l1 : Level, l2 : Level) -> Level:
 
 ### 2.4 `qualified_name` — 名字拼接操作                           【v10 新增】
 
-定义一个函数用于从父名字和子名字拼接出完整全局名字：
+定义一个底层原语用于从父名字和子名字构造完整全局名字：
 
 ```python
 # 写作 qualified_name(parent, child)
 def qualified_name(parent : GlobalName, child : LocalName) -> GlobalName:
-    '''
-    从 parent 和 child 拼出完整的全局名字。
-    要求 parent ≠ child。
-    对固定 parent，若 child₁ ≠ child₂，则 qualified_name(parent, child₁) ≠ qualified_name(parent, child₂)。
-    对固定 child，若 parent₁ ≠ parent₂，则 qualified_name(parent₁, child) ≠ qualified_name(parent₂, child)。
-    '''
+    # 底层已实现：将 parent 和 child 编码为一个新的 GlobalName
+    # 要求 parent ≠ child
+    # injectivity：qualified_name(p1, c1) = qualified_name(p2, c2) 当且仅当 p1=p2, c1=c2
 ```
 
-此函数可以理解为在当前模型的 GlobalName 集合上的一个二元操作。底层实现可视为字符串拼接（`parent + "." + child`）或任意满足可区分性条件的映射。当前阶段不展开实现细节，只假定它满足上述性质。
+当前阶段将 `qualified_name` 视为底层已实现（与 `fresh_local_name`、`Nat` 运算同级）。它的行为由一个 injectivity 公理刻画：`qualified_name(p1, c1) = qualified_name(p2, c2) ⟺ p1 = p2 ∧ c1 = c2`。
 
 **简写约定：** 在例子和注释中，`qualified_name(Sigma, a)` 简写为 `Sigma.a`，`qualified_name(Point, x)` 简写为 `Point.x`，等。
 
