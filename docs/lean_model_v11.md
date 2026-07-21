@@ -81,7 +81,7 @@ def exec(S: State, cmd: Command) -> State:
   - 所有 kernel 函数（`infer_type`、`check_type`、`whnf`、`defeq`、`FV`、`subst`）只作用于 `CoreTerm`。
   - `elab` 函数负责把 `SurfaceTerm` 转换为 `CoreTerm`。
 - v10 新增 `ProjectionInfo`（§5.1b）和 `State.Projections`（§5.3）— StructureCmd 自动为每个字段生成投影名。投影名用于 elaboration（§15a），不注册到 Axioms（Method A）。
-- v11 新增 `InductiveCmd`（§6）— 用户通过顶层命令声明 inductive 类型。v11 第一版只支持最简单的 non-indexed inductive（Bool/Unit/Empty 级别：零个参数、零个递归参数），暂不支持 Nat 级别的递归 inductive。CoreTerm 不变 — constructors 和 recursor 都是 `Const`，它们的应用都是 `App` 链。`whnf` 新增 iota reduction 规则。
+- v11 新增 `InductiveCmd`（§6）— 用户通过顶层命令声明 inductive 类型。v11 第一版只支持最简单的 non-indexed inductive（Bool/Unit/Empty 级别：零个参数、零个递归参数），暂不支持 Nat 级别的递归 inductive。CoreTerm 不变 — constructors 和 recursor 都是 `Const`，它们的应用都是 `App` 链。`whnf` 新增 iota reduction 规则。v11 还新增辅助函数 `qualified_name`（§2.4）、`name_is_used`（§7.0）、`add_axiom`（§7.0）。
 - `StructureCmd`（§6）让用户通过顶层命令声明新结构（包括 Sigma 和 Prod）。当前模型不预置任何结构 — 所有 StructureInfo 都通过 StructureCmd 生成。Kernel 规则无需修改即可处理新声明的结构。
 ---
 ## 1. 关于 `PartialMap`
@@ -139,6 +139,35 @@ def max_level(l1 : Level, l2 : Level) -> Level:
         return level max(m, n)
     raise Error            # 之后再补充
 ```
+
+### 2.4 `qualified_name` — 名字拼接操作                           【v11 新增】
+
+定义一个函数用于从父名字和子名字拼接出完整全局名字：
+
+```python
+# 写作 qualified_name(parent, child)
+def qualified_name(parent : GlobalName, child : LocalName) -> GlobalName:
+    '''
+    从 parent 和 child 拼出完整的全局名字。
+    要求 parent ≠ child。
+    对固定 parent，若 child₁ ≠ child₂，则 qualified_name(parent, child₁) ≠ qualified_name(parent, child₂)。
+    对固定 child，若 parent₁ ≠ parent₂，则 qualified_name(parent₁, child) ≠ qualified_name(parent₂, child)。
+    '''
+```
+
+此函数可以理解为在当前模型的 GlobalName 集合上的一个二元操作。底层实现可视为字符串拼接（`parent + "." + child`）或任意满足可区分性条件的映射。当前阶段不展开实现细节，只假定它满足上述性质。
+
+**简写约定：** 在例子和注释中，`qualified_name(Bool, false)` 简写为 `Bool.false`，`qualified_name(Bool, rec)` 简写为 `Bool.rec`，等。
+
+### 2.5 保留名字                                                【v11 新增】
+
+取一个不参与普通 binder 命名的保留短名字：
+
+```text
+rec : LocalName
+```
+
+`rec` 用于构造 recursor 的完整全局名 `qualified_name(typeName, rec)`。要求 `rec` 不与任何用户提供的 constructor 短名字（`ConstructorDecl.name`）冲突（检查由 InductiveCmd 的名字冲突检查保证）。
 ---
 ## 3. `SurfaceTerm`
 
@@ -321,7 +350,7 @@ InductiveInfo(
 )
 ```
 
-注意：`ConstructorInfo.name` 是完整全局名字（如 `Bool.false`，由 `typeName + "." + decl.name` 拼接），不是用户提供的短名字（`false`）。用户写在 `ConstructorDecl` 中的是短名字，`exec` 拼接为完整全局名字。
+注意：`ConstructorInfo.name` 是完整全局名字（如 `Bool.false`，由 `qualified_name(typeName, decl.name)` 拼接），不是用户提供的短名字（`false`）。用户写在 `ConstructorDecl` 中的是短名字，`exec` 拼接为完整全局名字。
 
 ### 5.1f `RecursorInfo`                                              【v11 新增】
 
@@ -346,6 +375,43 @@ RecursorInfo(
   ]
 )
 ```
+
+### 5.1g `InductiveInfo` well-formedness invariant                     【v11 新增】
+
+`S.Inductives` 中的每个 `InductiveInfo` 必须满足以下条件：
+
+1. **类型名一致：** `info.typeName` 等于它在 `S.Inductives` 中的 key。
+
+2. **类型名已注册：** `info.typeName ∈ dom(S.Axioms)`，且 `S.Axioms[info.typeName] = Sort(level 0)`。（v11 第一版：所有 inductive 类型都在 Sort 0。）
+
+3. **recursor 已注册：** `info.recursor ∈ dom(S.Axioms)`，且 `info.recursor ∈ dom(S.Recursors)`。
+
+4. **构造子名互不相同：** `info.constructors` 中所有 `ConstructorInfo.name` 互不相同。
+
+5. **构造子已注册（v11 第一版）：** 对每个 `ctor ∈ info.constructors`：
+   - `ctor.args = []`（nullary）；
+   - `ctor.name ∈ dom(S.Axioms)`；
+   - `S.Axioms[ctor.name] = Const(info.typeName)`。
+
+6. **recursor 类型正确：** `S.Axioms[info.recursor] = make_recursor_type(info)`。
+
+### 5.1h `RecursorInfo` well-formedness invariant                      【v11 新增】
+
+`S.Recursors` 中的每个 `RecursorInfo` 必须满足以下条件：
+
+1. **recursor 名一致：** `rec_info.recursorName` 等于它在 `S.Recursors` 中的 key。
+
+2. **对应 inductive 已注册：** `rec_info.inductiveName ∈ dom(S.Inductives)`。
+
+3. **交叉引用一致：** 令 `ind_info = S.Inductives[rec_info.inductiveName]`，则 `ind_info.recursor = rec_info.recursorName`。
+
+4. **构造子列表与 InductiveInfo 一致：** `rec_info.constructors = ind_info.constructors`。
+
+5. **recursor 名已在 Axioms 中：** `rec_info.recursorName ∈ dom(S.Axioms)`。
+
+6. **recursor 类型正确：** `S.Axioms[rec_info.recursorName] = make_recursor_type(ind_info)`。
+
+**评论：** 当前模型中所有 InductiveInfo 和 RecursorInfo 都通过 `exec(InductiveCmd)` 自动生成——名字检查（§7.5）、类型生成（§5c）和状态更新步骤共同保证了上述条件。没有 InductiveInfo 或 RecursorInfo 是预置的；`InductiveCmd` 是唯一产生它们的途径。
 
 ### 5.2 `StructureInfo`
 
@@ -583,7 +649,7 @@ InductiveCmd Bool
   constructors = [false : Bool, true : Bool]
 ```
 
-这意味着：声明一个 inductive 类型 Bool，有两个构造子 false 和 true（无参数）。`false` 和 `true` 的完整全局名字是 `Bool.false` 和 `Bool.true`（由 `typeName + "." + constructorName` 拼接）。
+这意味着：声明一个 inductive 类型 Bool，有两个构造子 false 和 true（无参数）。`false` 和 `true` 的完整全局名字是 `Bool.false` 和 `Bool.true`（由 `qualified_name(typeName, constructorName)` 生成）。
 
 还可以声明 `Empty`（零构造子）和 `Unit`（单构造子）：
 
@@ -605,6 +671,47 @@ InductiveCmd Unit
 ```text
 exec(S : State, cmd : Command) -> State
 ```
+
+### 7.0 辅助函数                                                  【v11 新增】
+
+**名字冲突检查：**
+
+```python
+# 写作 name_is_used(S, n)
+def name_is_used(S : State, n : GlobalName) -> bool:
+    '''
+    检查名字 n 是否已被 S 的六个名字空间中的任何一个使用。
+    '''
+    return (
+        n in S.Axioms or
+        n in S.Defs or
+        n in S.Structures or
+        n in S.Projections or
+        n in S.Inductives or
+        n in S.Recursors
+    )
+```
+
+**安全地向 State 添加 axiom：**
+
+```python
+# 写作 add_axiom(S, n, A)
+def add_axiom(S : State, n : GlobalName, A : CoreTerm) -> State:
+    '''
+    在 S 中注册新 axiom n : A。
+    不修改 Defs, Structures, Projections, Inductives, Recursors。
+    '''
+    return State(
+        Axioms      = S.Axioms.set(n, A),
+        Defs        = S.Defs,
+        Structures  = S.Structures,
+        Projections = S.Projections,
+        Inductives  = S.Inductives,
+        Recursors   = S.Recursors
+    )
+```
+
+**评论：** v11 新增的两个辅助函数用于保持代码整洁。`name_is_used` 在所有命令分支中复用；`add_axiom` 替代手写 `State(...)` 样板代码。两者都不影响模型的语义——它们只是 v10 中内联检查的封装。
 
 ### 7.1–7.3 AxiomCmd / DefCmd / StructureCmd                    【v11 修改】
 
@@ -635,7 +742,7 @@ cmd = InductiveCmd(typeName, constructor_decls)
 typeName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections) ∪ dom(S.Inductives) ∪ dom(S.Recursors)
 ```
 
-并要求：所有构造子的完整名字 `typeName + "." + constructorDecl.name` 互不相同，且不能等于 `typeName` 或 `recursor_name`，且不与 State 六个名字空间中任何已有名字冲突。
+并要求：所有构造子的完整名字 `qualified_name(typeName, constructorDecl.name)` 互不相同，且不能等于 `typeName` 或 `recursor_name`，且不与 State 六个名字空间中任何已有名字冲突。
 
 执行分四步：
 
@@ -655,10 +762,10 @@ for decl in constructor_decls:
         arg_type_core = elab(S, Γ, arg_type_surf, None)
         arg_infos.append(Pair(arg_name, arg_type_core))
         Γ = expand_context(Γ, arg_name, arg_type_core)
-    ctor_full_name = typeName + "." + decl.name
+    ctor_full_name = qualified_name(typeName, decl.name)
     ctor_infos.append(ConstructorInfo(ctor_full_name, arg_infos))
 
-recursor_name = typeName + "." + "rec"
+recursor_name = qualified_name(typeName, rec)
 
 info = InductiveInfo(typeName, ctor_infos, recursor_name)
 rec_info = RecursorInfo(recursor_name, typeName, ctor_infos)
@@ -706,21 +813,21 @@ elif isinstance(cmd, InductiveCmd):
     typeName, constructor_decls = cmd.args
 
     # 第一步：名字检查
-    if typeName in S.Axioms or typeName in S.Defs or typeName in S.Structures or typeName in S.Projections or typeName in S.Inductives or typeName in S.Recursors:
+    if name_is_used(S, typeName):
         raise Error            # typeName 不能与已有全局名字冲突
 
-    recursor_name = typeName + "." + "rec"
-    if recursor_name in S.Axioms or recursor_name in S.Defs or recursor_name in S.Structures or recursor_name in S.Projections or recursor_name in S.Inductives or recursor_name in S.Recursors:
+    recursor_name = qualified_name(typeName, rec)
+    if name_is_used(S, recursor_name):
         raise Error            # recursor 名不能与已有名字冲突
 
     ctor_names = []
     for decl in constructor_decls:
-        ctor_full_name = typeName + "." + decl.name
+        ctor_full_name = qualified_name(typeName, decl.name)
         if ctor_full_name == typeName:
             raise Error        # 构造子名不能等于 typeName
         if ctor_full_name == recursor_name:
             raise Error        # 构造子名不能等于 recursor 名
-        if ctor_full_name in S.Axioms or ctor_full_name in S.Defs or ctor_full_name in S.Structures or ctor_full_name in S.Projections or ctor_full_name in S.Inductives or ctor_full_name in S.Recursors:
+        if name_is_used(S, ctor_full_name):
             raise Error        # 构造子名不能与已有名字冲突
         if ctor_full_name in ctor_names:
             raise Error        # 构造子名不能重复
@@ -731,7 +838,7 @@ elif isinstance(cmd, InductiveCmd):
     for decl in constructor_decls:
         if len(decl.args) != 0:
             raise Error        # v11 第一版：constructor 不能有参数
-        ctor_infos.append(ConstructorInfo(typeName + "." + decl.name, []))
+        ctor_infos.append(ConstructorInfo(qualified_name(typeName, decl.name), []))
 
     # 第三步：类型生成 + 验证
     info = InductiveInfo(typeName, ctor_infos, recursor_name)
@@ -745,17 +852,10 @@ elif isinstance(cmd, InductiveCmd):
         raise Error
 
     # 加入 typeName 和 constructors
-    S_tmp = State(
-        Axioms = S.Axioms.set(typeName, type_type),
-        Defs = S.Defs,
-        Structures = S.Structures,
-        Projections = S.Projections,
-        Inductives = S.Inductives,
-        Recursors = S.Recursors
-    )
+    S_tmp = add_axiom(S, typeName, type_type)
     for ctor_info in ctor_infos:
         ctor_type = Const(typeName)  # v11 第一版：nullary
-        S_tmp = S_tmp.set_Axiom(ctor_info.name, ctor_type)
+        S_tmp = add_axiom(S_tmp, ctor_info.name, ctor_type)
 
     # 生成 recursor 类型
     rec_type = make_recursor_type(info)
@@ -764,7 +864,7 @@ elif isinstance(cmd, InductiveCmd):
     if not isinstance(T_rec_type, Sort):
         raise Error
 
-    S_tmp = S_tmp.set_Axiom(recursor_name, rec_type)
+    S_tmp = add_axiom(S_tmp, recursor_name, rec_type)
 
     # 第四步：状态更新
     return State(
@@ -776,8 +876,6 @@ elif isinstance(cmd, InductiveCmd):
         Recursors   = S.Recursors.set(recursor_name, rec_info)
     )
 ```
-
-注：`S_tmp.set_Axiom(n, t)` 是 `S_tmp = State(Axioms = S_tmp.Axioms.set(n, t), ...)` 的简写。
 
 **评论：**
 
@@ -826,8 +924,9 @@ if isinstance(t, App):
         x, A, body = f0.args
         return whnf(S, subst(body, x, a))
 
-    # iota reduction：检查 head 是否是 recursor     【v11 新增】
-    head_args = collect_app(t)
+    # iota reduction：对归约后的 app 做 collect_app，检查 head 是否是 recursor     【v11 新增】
+    t0 = App(f0, a)
+    head_args = collect_app(t0)
     head, args = head_args.args
 
     if isinstance(head, Const) and head.args in S.Recursors:
@@ -843,7 +942,7 @@ if isinstance(t, App):
                     if ctor_info.name == ctor_name:
                         return whnf(S, args[1 + j])  # 选择对应 case
 
-    return App(f0, a)
+    return t0
 ```
 
 **评论：**
@@ -884,8 +983,9 @@ def whnf(S : State, t : CoreTerm) -> CoreTerm:
             x, A, body = f0.args
             return whnf(S, subst(body, x, a))
 
-        # iota reduction：检查 head 是否是 recursor       【v11 新增】
-        head_args = collect_app(t)
+        # iota reduction：检查归约后的 head 是否是 recursor       【v11 新增】
+        t0 = App(f0, a)
+        head_args = collect_app(t0)
         head, args = head_args.args
 
         if isinstance(head, Const) and head.args in S.Recursors:
@@ -898,7 +998,7 @@ def whnf(S : State, t : CoreTerm) -> CoreTerm:
                         if ctor_info.name == target_whnf.args:
                             return whnf(S, args[1 + j])
 
-        return App(f0, a)
+        return t0
 
     if isinstance(t, Proj):
         # 与 v10 完全相同
@@ -943,15 +1043,26 @@ def whnf(S : State, t : CoreTerm) -> CoreTerm:
 ---
 ## 15. 构建前置状态 `S`
 
-v11 的前置状态 S 在 v10 的 S 基础上，额外执行 InductiveCmd Bool：
+v11 的前置状态 `S_v11` 由以下命令序列从空状态 S₀ 构建：
 
 ```text
-S  = v10 中构建的状态（包含 Sigma, Prod, Nat, zero, Pred, choosePred）
+S₁  = exec(S₀, StructureCmd Sigma Sigma.mk      -- 参数和字段见 v10 §15b.1
+  params = [A : SSort 0, B : SForall(x, SVar A, SSort 0)]
+  fields = [a : SVar A, b : SApp(SVar B, SVar a)])
 
-S' = exec(S, InductiveCmd Bool
+S₂  = exec(S₁, StructureCmd Prod Prod.mk         -- 参数和字段见 v10 §15b.2
+  params = [A : SSort 0, B : SSort 0]
+  fields = [a : SVar A, b : SVar B])
+
+S₃  = exec(S₂, AxiomCmd Nat : SSort (level 0))
+S₄  = exec(S₃, AxiomCmd zero : SConst Nat)
+S₅  = exec(S₄, AxiomCmd Pred : SForall(x, SConst Nat, SSort (level 0)))
+S₆  = exec(S₅, AxiomCmd choosePred : SForall(x, SConst Nat, SApp(SConst Pred, SVar x)))
+
+S₇  = exec(S₆, InductiveCmd Bool
   constructors = [false : Bool, true : Bool])
 
-S_v11 = S'
+S_v11 = S₇
 ```
 
 因此在 `S_v11` 中：
@@ -1001,12 +1112,11 @@ cmd = InductiveCmd Bool
 
 **第一步：名字检查**
 
-```text
-Bool ∉ S.Axioms     ✓
-Bool.false ∉ S.Axioms ✓
-Bool.true ∉ S.Axioms  ✓
-Bool.rec ∉ S.Axioms    ✓
-```
+`name_is_used(S, Bool) = False` ✓（Bool 不在 S 的六个名字空间中）
+
+`name_is_used(S, Bool.false) = False` ✓（`Bool.false` 也不在六个名字空间中）
+
+同理 `Bool.true` 和 `Bool.rec` 也不在六个名字空间中。同时 `Bool.false ≠ Bool`、`Bool.true ≠ Bool`、`Bool.false ≠ Bool.rec`、`Bool.true ≠ Bool.rec`，构造子名互不相同。所有名字检查通过 ✓
 
 **第二步：Telescope 检查**
 
@@ -1165,7 +1275,7 @@ defeq(S'', ∅, App(Const not, Const Bool.false), Const Bool.true)
 1. 两边 whnf。左边 whnf → `Const Bool.true`（§19.7 已证）。右边 whnf → `Const Bool.true`（Bool.true 是 axiom）。
 2. 两边相同 ✓
 
-**结论：** `defeq` 返回 `True`。这意味着 `check_type(S'', ∅, App(Const not, Const Bool.false), Const Bool)` 也会成功（因为 `true` 和 `not false` 类型相同且定义相等）。`defeq` 通过 `whnf` 的 iota reduction 发现了 `not false = true`。
+**结论：** `defeq` 返回 `True`。`not false` 与 `Bool.true` definitionally equal。另外，`check_type(S'', ∅, App(Const not, Const Bool.false), Const Bool)` 成功——因为 `infer_type(S'', ∅, App(Const not, Const Bool.false)) = Const Bool`（通过 delta + beta 展开 `not`，`infer_type` 推断出返回类型为 `Const Bool`），与目标类型 `Const Bool` definitionally equal。`defeq` 通过 `whnf` 的 iota reduction 使得 `not false = true` 在定义相等中被识别。
 
 ---
 ## 21. `elab` 例子
@@ -1228,7 +1338,8 @@ State 字段：Axioms, Defs, Structures, Projections, Inductives, Recursors     
 函数：FV(CoreTerm), subst(CoreTerm), subst_many, exec, infer_type, check_type, whnf, defeq, elab, elab_raw,
       is_sigma_type, collect_app, match_structure_type, projection_type,
       make_forall_chain, make_type_app, make_structure_type, make_constructor_type,
-      make_motive_type, make_recursor_type                                             【v11 新增 2 个 recursor 类型生成函数】
+      make_motive_type, make_recursor_type,
+      qualified_name, name_is_used, add_axiom                                        【v11 新增 2 个 recursor 类型生成函数 + 3 个辅助函数】
 ```
 
 类型系统特性：
