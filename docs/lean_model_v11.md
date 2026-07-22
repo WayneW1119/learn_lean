@@ -1,5 +1,7 @@
 # model v11
 
+> **本模型建立在 model v10 的所有定义之上。** 凡标注"与 v10 相同"的章节，其定义以 model v10 的对应章节为准。v11 新增或修改的章节以 `【v11 新增】` / `【v11 修改】` 标记。
+>
 > **相对于 v10 的变化：**
 >
 > * §5.1d（新增）：`ConstructorInfo` 数据类型 — 记录构造子名和参数类型
@@ -81,7 +83,7 @@ def exec(S: State, cmd: Command) -> State:
   - 所有 kernel 函数（`infer_type`、`check_type`、`whnf`、`defeq`、`FV`、`subst`）只作用于 `CoreTerm`。
   - `elab` 函数负责把 `SurfaceTerm` 转换为 `CoreTerm`。
 - v10 新增 `ProjectionInfo`（§5.1b）和 `State.Projections`（§5.3）— StructureCmd 自动为每个字段生成投影名。投影名用于 elaboration（§15a），不注册到 Axioms（Method A）。
-- v11 新增 `InductiveCmd`（§6）— 用户通过顶层命令声明 inductive 类型。v11 第一版只支持最简单的 non-indexed inductive（Bool/Unit/Empty 级别：零个参数、零个递归参数），暂不支持 Nat 级别的递归 inductive。CoreTerm 不变 — constructors 和 recursor 都是 `Const`，它们的应用都是 `App` 链。`whnf` 新增 iota reduction 规则。v11 还新增辅助函数 `qualified_name`（§2.4）、`name_is_used`（§7.0）、`add_axiom`（§7.0）。
+- v11 新增 `InductiveCmd`（§6）— 用户通过顶层命令声明 inductive 类型。v11 第一版只支持最简单的 non-indexed inductive（Bool/Unit/Empty 级别：零个参数、零个递归参数），暂不支持 Nat 级别的递归 inductive。CoreTerm 不变 — constructors 和 recursor 都是 `Const`，它们的应用都是 `App` 链。`whnf` 新增 iota reduction 规则。v11 还新增辅助函数 `qualified_name`（§2.4）、`name_is_used`（§7.0）、`add_axiom_unchecked`（§7.0）。
 - `StructureCmd`（§6）让用户通过顶层命令声明新结构（包括 Sigma 和 Prod）。当前模型不预置任何结构 — 所有 StructureInfo 都通过 StructureCmd 生成。Kernel 规则无需修改即可处理新声明的结构。
 ---
 ## 1. 关于 `PartialMap`
@@ -148,23 +150,24 @@ def max_level(l1 : Level, l2 : Level) -> Level:
 # 写作 qualified_name(parent, child)
 def qualified_name(parent : GlobalName, child : LocalName) -> GlobalName:
     # 底层已实现：将 parent 和 child 编码为一个新的 GlobalName
-    # 要求 parent ≠ child
-    # injectivity：qualified_name(p1, c1) = qualified_name(p2, c2) 当且仅当 p1=p2, c1=c2
+    # 此函数是 total 的 — 对所有 parent：GlobalName, child：LocalName 都有定义
 ```
 
-当前阶段将 `qualified_name` 视为底层已实现（与 `fresh_local_name`、`Nat` 运算同级）。它的行为由一个 injectivity 公理刻画：`qualified_name(p1, c1) = qualified_name(p2, c2) ⟺ p1 = p2 ∧ c1 = c2`。
+**injectivity 公理：** `qualified_name(p₁, c₁) = qualified_name(p₂, c₂) ⟺ p₁ = p₂ ∧ c₁ = c₂`。
+
+此函数视为底层已实现（与 `fresh_local_name`、`Nat` 运算同级）。生成名可能与已有名字冲突——是否允许写入 State 由 `exec` 的名字检查（`name_is_used`）决定。
 
 **简写约定：** 在例子和注释中，`qualified_name(Bool, false)` 简写为 `Bool.false`，`qualified_name(Bool, rec)` 简写为 `Bool.rec`，等。
 
 ### 2.5 保留名字                                                【v11 新增】
 
-取一个不参与普通 binder 命名的保留短名字：
+取一个固定的短名字用于构造 recursor 名：
 
 ```text
 rec : LocalName
 ```
 
-`rec` 用于构造 recursor 的完整全局名 `qualified_name(typeName, rec)`。要求 `rec` 不与任何用户提供的 constructor 短名字（`ConstructorDecl.name`）冲突（检查由 InductiveCmd 的名字冲突检查保证）。
+`rec` 是一个固定的 `LocalName`，用于构造 recursor 的完整全局名 `qualified_name(typeName, rec)`。`InductiveCmd` 要求任何 `ConstructorDecl.name ≠ rec`（由后面的名字冲突检查 `ctor_full_name == recursor_name` 保证——若 `decl.name = rec`，则 `qualified_name(typeName, rec)` 作为构造子名会等于 recursor 名，被拒绝）。
 ---
 ## 3. `SurfaceTerm`
 
@@ -529,12 +532,12 @@ def make_recursor_type(info : InductiveInfo) -> CoreTerm:
       Π (target : T),
         motive target
 
-    其中 case₁, case₂, ... 是自动生成的不重复局部名字。
+    使用确定性的保留名生成，保证每次对同一个 info 调用结果相同。
     '''
 
-    motiveName = fresh_local_name(set())
-    motiveArg  = fresh_local_name({motiveName})
-    targetName = fresh_local_name({motiveName, motiveArg})
+    motiveName = reserved_local_name("motive")    # 固定保留名
+    motiveArg  = reserved_local_name("_")         # 固定保留名
+    targetName = reserved_local_name("target")    # 固定保留名
 
     # motive : Π (_ : T), Sort 0
     motive_type = Forall(
@@ -547,12 +550,9 @@ def make_recursor_type(info : InductiveInfo) -> CoreTerm:
         Pair(motiveName, motive_type)
     ]
 
-    used = {motiveName, motiveArg, targetName}
-
-    # 为每个 constructor 生成一个 case binder（局部名字）
-    for ctor in info.constructors:
-        caseName = fresh_local_name(used)
-        used.add(caseName)
+    # 为每个 constructor 生成一个 case binder（确定性名字）
+    for i, ctor in enumerate(info.constructors):
+        caseName = reserved_local_name("case_" + str(i))  # case_0, case_1, ...
 
         # case_i : motive ctor_i（nullary constructor 的特例）
         case_type = App(Var(motiveName), Const(ctor.name))
@@ -567,6 +567,8 @@ def make_recursor_type(info : InductiveInfo) -> CoreTerm:
     return make_forall_chain(telescope, body)
 ```
 
+其中 `reserved_local_name(s)` 是一个确定性函数：对每个字符串 `s`，返回一个唯一的固定 `LocalName`。不同字符串返回不同的 LocalName，且这些名字不与普通 binder 冲突。`reserved_local_name` 视为底层已实现。
+
 **例子：** 对于 Bool：
 
 ```text
@@ -576,32 +578,19 @@ make_recursor_type(InductiveInfo(Bool, [
   ], Bool.rec))
 ```
 
-motiveName = fresh（例如 `m`），motiveArg = fresh（例如 `_x`），targetName = fresh（例如 `b`），case₁ = fresh（例如 `c₁`），case₂ = fresh（例如 `c₂`）。
-
 生成的类型：
 
 ```text
-Π (m : Π (_x : Bool), Sort 0),
-Π (c₁ : m Bool.false),
-Π (c₂ : m Bool.true),
-Π (b : Bool),
-  m b
+Π (motive : Π (_ : Bool), Sort 0),
+Π (case_0 : motive Bool.false),
+Π (case_1 : motive Bool.true),
+Π (target : Bool),
+  motive target
 ```
-
-**也就是：**
-
-```text
-Bool.rec :
-  Π (motive : Π (_ : Bool), Sort 0),
-  Π (case_false : motive Bool.false),
-  Π (case_true  : motive Bool.true),
-  Π (b : Bool),
-    motive b
-```
-
-其中 case binder 名 `case_false` / `case_true` 由 `fresh_local_name` 自动生成（不与 motive、motiveArg、targetName 冲突），**不是**构造子全局名 `Bool.false` / `Bool.true`。
 
 这与预期的 Bool.rec 类型完全一致 ✓
+
+因为使用了确定的保留名，`make_recursor_type` 是确定性函数——对同一个 `info` 多次调用返回**语法相同**的 CoreTerm。
 
 **评论：** `make_recursor_type` 的生成规则是通用的 — 不硬编码 Bool。对于任何 inductive type，它自动生成 `motive` binder、每个构造子对应的 case binder、target binder，以及 `motive target` 作为 body。v11 第一版中所有构造子都是 nullary，所以 case 类型简化为 `motive ctor_i`。将来到 Nat 时（`succ : Nat → Nat`），case_succ 需要额外处理递归参数和 minor premise，这个函数需要相应扩展。
 
@@ -689,14 +678,16 @@ def name_is_used(S : State, n : GlobalName) -> bool:
     )
 ```
 
-**安全地向 State 添加 axiom：**
+**无检查地向 State 添加 axiom：**
 
 ```python
-# 写作 add_axiom(S, n, A)
-def add_axiom(S : State, n : GlobalName, A : CoreTerm) -> State:
+# 写作 add_axiom_unchecked_unchecked(S, n, A)
+def add_axiom_unchecked_unchecked(S : State, n : GlobalName, A : CoreTerm) -> State:
     '''
     在 S 中注册新 axiom n : A。
-    不修改 Defs, Structures, Projections, Inductives, Recursors。
+    不检查 n 是否已被使用，不检查 A 是否是 type。
+    调用者必须保证：name_is_used(S, n) = False，
+    且 whnf(S, infer_type(S, ∅, A)) : Sort u。
     '''
     return State(
         Axioms      = S.Axioms.set(n, A),
@@ -708,7 +699,7 @@ def add_axiom(S : State, n : GlobalName, A : CoreTerm) -> State:
     )
 ```
 
-**评论：** v11 新增的两个辅助函数用于保持代码整洁。`name_is_used` 在所有命令分支中复用；`add_axiom` 替代手写 `State(...)` 样板代码。两者都不影响模型的语义——它们只是 v10 中内联检查的封装。
+**评论：** v11 新增的两个辅助函数用于保持代码整洁。`name_is_used` 在所有命令分支中复用；`add_axiom_unchecked_unchecked` 替代手写 `State(...)` 样板代码。两者都不影响模型的语义——它们只是 v10 中内联检查的封装。`add_axiom_unchecked_unchecked` 本身不做任何验证；类型检查和名字冲突检查由调用者（`exec` 各分支）在调用前完成。
 
 ### 7.1–7.3 AxiomCmd / DefCmd / StructureCmd                    【v11 修改】
 
@@ -752,15 +743,9 @@ typeName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Proje
 ```text
 ctor_infos = []
 for decl in constructor_decls:
-    # elaborate 每个参数类型（v11 第一版：args 为空）
-    arg_infos = []
-    Γ = Context(Types={})
-    for arg_name, arg_type_surf in decl.args:
-        arg_type_core = elab(S, Γ, arg_type_surf, None)
-        arg_infos.append(Pair(arg_name, arg_type_core))
-        Γ = expand_context(Γ, arg_name, arg_type_core)
+    # v11 第一版：args 必须为空（已在第二步检查）
     ctor_full_name = qualified_name(typeName, decl.name)
-    ctor_infos.append(ConstructorInfo(ctor_full_name, arg_infos))
+    ctor_infos.append(ConstructorInfo(ctor_full_name, []))
 
 recursor_name = qualified_name(typeName, rec)
 
@@ -849,10 +834,10 @@ elif isinstance(cmd, InductiveCmd):
         raise Error
 
     # 加入 typeName 和 constructors
-    S_tmp = add_axiom(S, typeName, type_type)
+    S_tmp = add_axiom_unchecked_unchecked(S, typeName, type_type)
     for ctor_info in ctor_infos:
         ctor_type = Const(typeName)  # v11 第一版：nullary
-        S_tmp = add_axiom(S_tmp, ctor_info.name, ctor_type)
+        S_tmp = add_axiom_unchecked_unchecked(S_tmp, ctor_info.name, ctor_type)
 
     # 生成 recursor 类型
     rec_type = make_recursor_type(info)
@@ -861,7 +846,7 @@ elif isinstance(cmd, InductiveCmd):
     if not isinstance(T_rec_type, Sort):
         raise Error
 
-    S_tmp = add_axiom(S_tmp, recursor_name, rec_type)
+    S_tmp = add_axiom_unchecked_unchecked(S_tmp, recursor_name, rec_type)
 
     # 第四步：状态更新
     return State(
@@ -1336,7 +1321,7 @@ State 字段：Axioms, Defs, Structures, Projections, Inductives, Recursors     
       is_sigma_type, collect_app, match_structure_type, projection_type,
       make_forall_chain, make_type_app, make_structure_type, make_constructor_type,
       make_motive_type, make_recursor_type,
-      qualified_name, name_is_used, add_axiom                                        【v11 新增 2 个 recursor 类型生成函数 + 3 个辅助函数】
+      qualified_name, name_is_used, add_axiom_unchecked                                        【v11 新增 2 个 recursor 类型生成函数 + 3 个辅助函数】
 ```
 
 类型系统特性：
