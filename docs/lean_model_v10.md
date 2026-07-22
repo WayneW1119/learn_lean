@@ -11,7 +11,8 @@
 > * §15b：StructureCmd 例子展示 ProjectionInfo 的生成
 > * §15a：`elab` 新增 `SProj` 和 `SDot` 分支
 > * §21：新增 SProj 和 SDot 的 elab 例子
-> * v10 不改 `CoreTerm`（7 个构造子不变），不改 kernel 函数（whnf、infer_type、defeq、projection_type 不变）
+> * §12a.1：为保证 `projection_type` 的 schema 替换正确，`subst_many` 改为基于 `subst_simul` 的 capture-avoiding simultaneous substitution
+> * v10 不改 `CoreTerm`（7 个构造子不变），不改 kernel typing/whnf/defeq 主规则
 >
 > **记号约定：** 本文档中有时使用"令 X = ..."或"简记 X 为 ..."。这是**文本层面的临时缩写**，不是模型中的操作。模型中没有"令"或"赋值"的概念 — State 的修改只能通过 `exec` 执行命令来完成。
 >
@@ -99,6 +100,9 @@ def exec(S: State, cmd: Command) -> State:
 M.contains(k)
 M.get(k)
 M.set(k, v)
+M.remove(k)
+dom(M)
+PartialMap.empty()
 ```
 也允许使用下列等价记号：
 ```text
@@ -411,7 +415,7 @@ class FieldInfo:
 1. `ParamInfo.type` 和 `FieldInfo.type` 是在 structure telescope 中生成的 CoreTerm template。
 2. 其中**自由出现**的 `Var name`，若 `name` 是参数名或前序字段名，则解释为 schema variable。
 3. Schema variables 只在 StructureInfo 内部存在——它们不会被对象层的 binder 绑定，也不属于任何对象层 Context（Γ）。
-4. 在 `projection_type` 返回结果前，所有 schema variables 必须通过 **capture-avoiding simultaneous substitution**（`subst_simul`、§12a.1）被替换掉。替换后结果是 closed CoreTerm（所有 Var 都被 binder 绑定），不再包含 schema variables。
+4. 在 `projection_type` 返回结果前，所有 schema variables 必须通过 **capture-avoiding simultaneous substitution**（`subst_simul`、§12a.1）被替换掉。替换后结果不再包含 schema variables。但它不一定是 closed CoreTerm——它可以包含对象层自由变量（如 `Proj(Sigma, 0, Var p)` 中的 `Var p`），只要这些变量在当前 Context Γ 中有类型即可。
 5. **替换不得递归进入 replacement term**——否则可能把 replacement term 内部的自由变量误当作 schema variable 再次替换。`subst_simul` 保证替换只在原始模板的 Var 位置进行。
 
 模板中的 `Var` 永远不会作为裸 schema variable 进入 typing 判断。
@@ -510,7 +514,9 @@ StructureInfo(
 
 `S.Structures` 中的每个 `StructureInfo` 必须满足以下条件：
 
-1. **类型名和构造子名已注册：** `info.typeName` 和 `info.constructor` 必须存在于 `S.Axioms` 或 `S.Defs` 中。
+1. **类型名已注册且类型正确：** `info.typeName ∈ dom(S.Axioms)`，且 `S.Axioms[info.typeName] = make_structure_type(info)`。
+
+2. **构造子名已注册且类型正确：** `info.constructor ∈ dom(S.Axioms)`，且 `S.Axioms[info.constructor] = make_constructor_type(info)`。
 2. **参数名互不相同：** `info.params` 中所有 `ParamInfo.name` 互不相等。
 3. **字段名互不相同：** `info.fields` 中所有 `FieldInfo.name` 互不相等。
 4. **参数名和字段名互不相同：** 任何 `ParamInfo.name` 不等于任何 `FieldInfo.name`。
@@ -586,13 +592,20 @@ S₀.Projections = {}
 Sigma, Sigma.mk, Prod, Prod.mk : GlobalName
 ```
 
-以及投影名（由 StructureCmd 自动生成，命名规则 = qualified_name(typeName, fieldName)）：
+取字段短名：
 
 ```text
-Sigma.a, Sigma.b, Prod.a, Prod.b : GlobalName
+a, b : LocalName
 ```
 
-这些名字在 StructureCmd 中由用户提供或自动生成（见 §6 和 §7.4）。并要求所有名字互不相同。
+定义以下元语言缩写（不表示这些名字已存在于 State 中；只有执行对应 StructureCmd 后，ProjectionInfo 才会写入 S.Projections）：
+
+```text
+Sigma.a := qualified_name(Sigma, a)
+Sigma.b := qualified_name(Sigma, b)
+Prod.a  := qualified_name(Prod, a)
+Prod.b  := qualified_name(Prod, b)
+```
 
 **评论：** v10 引入投影名 `Sigma.a / Sigma.b / Prod.a / Prod.b`。它们不是 Axioms 中的全局常量（Method A），而是 `State.Projections` 中的元数据 — 用于 elaboration（`SProj` 和 `SDot`）把投影名翻译成 `Proj(structName, index, target_core)`。注意：我们的模型中 Sigma 的字段名是 `a` 和 `b`（不是 Lean 的 `fst` 和 `snd`），所以投影名是 `Sigma.a` 和 `Sigma.b`（不是 Lean 的 `Sigma.fst` 和 `Sigma.snd`）。如果将来让用户在 FieldDecl 中自定义投影名，就可以声明 `structure Sigma where fst : A, snd : B a`，投影名自然变成 `Sigma.fst` 和 `Sigma.snd`。
 
@@ -989,10 +1002,7 @@ S --cmd--> S'
 cmd = AxiomCmd(n, A_surf)
 A_core = elab(S, ∅, A_surf, None)
 infer_type(S, ∅, A_core) : Sort u                    （声明的类型本身必须是 type）
-not S.Axioms.contains(n)
-not S.Defs.contains(n)
-not S.Structures.contains(n)
-not S.Projections.contains(n)
+not name_is_used(S, n)
 ```
 
 则：
@@ -1023,10 +1033,7 @@ cmd = DefCmd(n, A_surf, t_surf)
 A_core = elab(S, ∅, A_surf, None)
 infer_type(S, ∅, A_core) : Sort u                    （声明的类型本身必须是 type）
 t_core = elab(S, ∅, t_surf, A_core)
-not S.Axioms.contains(n)
-not S.Defs.contains(n)
-not S.Structures.contains(n)
-not S.Projections.contains(n)
+not name_is_used(S, n)
 check_type(S, ∅, t_core, A_core)
 ```
 
@@ -1054,11 +1061,11 @@ S' = State(
 ```text
 cmd = StructureCmd(typeName, constructor, param_decls, field_decls)
 typeName ≠ constructor
-typeName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections)
-constructor ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections)
+not name_is_used(S, typeName)
+not name_is_used(S, constructor)
 ```
 
-并要求：所有自动生成的投影名 `qualified_name(typeName, fieldDecl.name)` 互不相同，且不与已有全局名字冲突（即不在 `dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures) ∪ dom(S.Projections)` 中）。v10 的命名规则：投影名 = `qualified_name(typeName, fieldName)`。
+并要求：所有自动生成的投影名 `qualified_name(typeName, fieldDecl.name)` 互不相同，且不能等于 `typeName` 或 `constructor`，且 `not name_is_used(S, projName)`。v10 的命名规则：投影名 = `qualified_name(typeName, fieldName)`。
 
 执行分五步：
 
@@ -1929,7 +1936,7 @@ def FV_range(sigma : PartialMap[LocalName, CoreTerm]) -> Set[LocalName]:
     返回 sigma 中所有 replacement term 的自由变量的并集。
     '''
     result = set()
-    for x in sigma:
+    for x in dom(sigma):
         result = result.union(FV(sigma.get(x)))
     return result
 ```
@@ -1982,13 +1989,11 @@ def subst_simul(t : CoreTerm, sigma : PartialMap[LocalName, CoreTerm]) -> CoreTe
         A1 = subst_simul(A, sigma)
 
         # binder x 遮蔽 sigma 中对 x 的替换
-        sigma_body = sigma.clone()
-        if x in sigma_body:
-            del sigma_body[x]
+        sigma_body = sigma.remove(x) if x in sigma else sigma
 
         # 若 x 出现在任何 replacement 的自由变量中，需要 alpha-rename
         if x in FV_range(sigma_body):
-            z = fresh_local_name(FV(body).union(FV(A)).union(FV_range(sigma_body)).union(set(sigma_body.keys())).union({x}))
+            z = fresh_local_name(FV(body).union(FV(A)).union(FV_range(sigma_body)).union(dom(sigma_body)).union({x}))
             body_z = alpha_rename_binder(body, x, z)
             return Lam(z, A1, subst_simul(body_z, sigma_body))
 
@@ -1999,12 +2004,10 @@ def subst_simul(t : CoreTerm, sigma : PartialMap[LocalName, CoreTerm]) -> CoreTe
 
         A1 = subst_simul(A, sigma)
 
-        sigma_body = sigma.clone()
-        if x in sigma_body:
-            del sigma_body[x]
+        sigma_body = sigma.remove(x) if x in sigma else sigma
 
         if x in FV_range(sigma_body):
-            z = fresh_local_name(FV(B).union(FV(A)).union(FV_range(sigma_body)).union(set(sigma_body.keys())).union({x}))
+            z = fresh_local_name(FV(B).union(FV(A)).union(FV_range(sigma_body)).union(dom(sigma_body)).union({x}))
             B_z = alpha_rename_binder(B, x, z)
             return Forall(z, A1, subst_simul(B_z, sigma_body))
 
@@ -2033,7 +2036,7 @@ def subst_many(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) ->
 
 **评论：** `subst_simul` 是真正的 simultaneous substitution——只替换原始 template 中的自由变量，不递归进入 replacement term。在 `Lam`/`Forall` 中，binder 名字会从 sigma 中移除（shadowing），若 binder 名字出现在 replacement term 的自由变量中则 alpha-rename（capture avoidance）。
 
-`projection_type` 中的替换对象是 structure schema 的变量名（如 `A`、`B`、`a`、`b`）。这些变量只出现在 `FieldInfo.type` 模板的自由变量位置——不嵌套在 Lam/Forall binder 下作为绑定的对象变量。因此 `subst_simul` 在实际使用中只走 `Var` 分支：找到模板中的 `Var A`，替换为 `A_val`；找到 `Var B`，替换为 `Bfun_val`；找到 `Var a`，替换为 `Proj(Sigma, 0, target)`。replacement term 内部不会进一步被替换——这正是 simultaneous substitution 保证的。
+`projection_type` 中的替换对象是 structure schema 的变量名（如 `A`、`B`、`a`、`b`）。在 Sigma/Prod 等简单例子中，字段模板主要由 Var 和 App 构成；在一般 StructureCmd 中，字段类型模板也可能包含 Forall 或 Lam。因此 `subst_simul` 必须完整处理所有 CoreTerm 构造子。Simultaneous substitution 保证 replacement term 内部不会被进一步替换。
 
 ### 12a.2 `match_structure_type`
 
@@ -3616,6 +3619,12 @@ S.Structures = {
   Sigma : StructureInfo(Sigma, Sigma.mk, params=[A, B], fields=[(a, Var A), (b, App(Var B, Var a))]),
   Prod  : StructureInfo(Prod, Prod.mk, params=[A, B], fields=[(a, Var A), (b, Var B)])
 }
+S.Projections = {
+  Sigma.a ↦ ProjectionInfo(Sigma.a, Sigma, 0),
+  Sigma.b ↦ ProjectionInfo(Sigma.b, Sigma, 1),
+  Prod.a  ↦ ProjectionInfo(Prod.a, Prod, 0),
+  Prod.b  ↦ ProjectionInfo(Prod.b, Prod, 1)
+}
 ```
 
 **结论：** `App(Lam(x, Const Nat, Var x), Const zero)` 的函数部分化简为 `Lam(...)`，触发 beta reduction，`subst(Var x, x, Const zero) = Const zero`，`zero` 是 axiom 不再展开：
@@ -3656,6 +3665,7 @@ S' = exec(S, DefCmd pair0
   SPair(SConst zero, SApp(SConst choosePred, SConst zero)))
 
 S'.Defs.get(pair0) = Pair(Sigma_type, p_core)
+S'.Projections = S.Projections
 S'.Structures = S.Structures
 ```
 
