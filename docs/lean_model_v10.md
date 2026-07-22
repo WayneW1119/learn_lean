@@ -6,7 +6,7 @@
 > * §5.1b（新增）：`ProjectionInfo` 数据类型 — 记录投影名、所属结构、字段下标
 > * §5.3：`State` 新增 `Projections` 字段
 > * §5a：S₀、SΣ、SΣΠ 状态现在包含 `Projections` 字段
-> * §7.4 / §7.5：`exec(StructureCmd)` 新增第五步 — 自动为每个字段生成 ProjectionInfo（投影名 = typeName + "." + fieldName）
+> * §7.4 / §7.5：`exec(StructureCmd)` 新增第五步 — 自动为每个字段生成 ProjectionInfo（投影名 = qualified_name(typeName, fieldName)）
 > * §15：前置状态 S 的构造和最终展示中包含 Projections
 > * §15b：StructureCmd 例子展示 ProjectionInfo 的生成
 > * §15a：`elab` 新增 `SProj` 和 `SDot` 分支
@@ -158,11 +158,12 @@ def max_level(l1 : Level, l2 : Level) -> Level:
 # 写作 qualified_name(parent, child)
 def qualified_name(parent : GlobalName, child : LocalName) -> GlobalName:
     # 底层已实现：将 parent 和 child 编码为一个新的 GlobalName
-    # 要求 parent ≠ child
-    # injectivity：qualified_name(p1, c1) = qualified_name(p2, c2) 当且仅当 p1=p2, c1=c2
+    # 此函数是 total 的 — 对所有 parent：GlobalName, child：LocalName 都有定义
 ```
 
-当前阶段将 `qualified_name` 视为底层已实现（与 `fresh_local_name`、`Nat` 运算同级）。它的行为由一个 injectivity 公理刻画：`qualified_name(p1, c1) = qualified_name(p2, c2) ⟺ p1 = p2 ∧ c1 = c2`。
+**injectivity 公理：** `qualified_name(p₁, c₁) = qualified_name(p₂, c₂) ⟺ p₁ = p₂ ∧ c₁ = c₂`。
+
+此函数视为底层已实现（与 `fresh_local_name`、`Nat` 运算同级）。生成名可能与已有名字冲突——是否允许写入 State 由 `exec` 的名字检查（`name_is_used`）决定。
 
 **简写约定：** 在例子和注释中，`qualified_name(Sigma, a)` 简写为 `Sigma.a`，`qualified_name(Point, x)` 简写为 `Point.x`，等。
 
@@ -403,7 +404,17 @@ class FieldInfo:
     type : CoreTerm          # 字段的类型（模板，可能引用参数名和前序字段名）
 ```
 
-**评论：** `ParamInfo.type` 和 `FieldInfo.type` 是**CoreTerm 形式的 schema template**。它们在语法上是合法的 CoreTerm，但可能含有**schema variables** — 即用 `Var` 引用参数名和前序字段名（如 `Var A`、`Var B`、`Var a`），这些名字属于 structure 的 schema 名字空间，不在任何真实的对象层 Γ 上下文中。因此，模板通常不是 closed CoreTerm，也不一定能在普通对象上下文中直接 type-check。`projection_type` 在返回前会替换掉所有 schema 变量，所以模板中的 `Var` 永远不会作为裸 term 进入 typing 判断。
+**评论：** `ParamInfo.type` 和 `FieldInfo.type` 是**CoreTerm 形式的 schema template**。它们在语法上是合法的 CoreTerm，但可能含有**schema variables**。
+
+**Schema template 约定：**
+
+1. `ParamInfo.type` 和 `FieldInfo.type` 是在 structure telescope 中生成的 CoreTerm template。
+2. 其中**自由出现**的 `Var name`，若 `name` 是参数名或前序字段名，则解释为 schema variable。
+3. Schema variables 只在 StructureInfo 内部存在——它们不会被对象层的 binder 绑定，也不属于任何对象层 Context（Γ）。
+4. 在 `projection_type` 返回结果前，所有 schema variables 必须通过 **capture-avoiding simultaneous substitution**（`subst_simul`、§12a.1）被替换掉。替换后结果是 closed CoreTerm（所有 Var 都被 binder 绑定），不再包含 schema variables。
+5. **替换不得递归进入 replacement term**——否则可能把 replacement term 内部的自由变量误当作 schema variable 再次替换。`subst_simul` 保证替换只在原始模板的 Var 位置进行。
+
+模板中的 `Var` 永远不会作为裸 schema variable 进入 typing 判断。
 
 ### 5.1b `ProjectionInfo`                                            【v10 新增】
 
@@ -432,7 +443,7 @@ Point:
   ProjectionInfo(Point.y, Point, 1)    # Point.y 指向 Point 的第 1 个字段 y
 ```
 
-**投影名自动生成规则：** v10 中，投影名由 `typeName + "." + fieldName` 自动生成。用户在 StructureCmd 中提供 `typeName` 和各字段的 `fieldName`，exec 自动拼接为投影名。例如 `Point` 的字段 `x` → 投影名 `Point.x`。将来若想让用户自定义投影名（如 `Point.x` 也能叫 `Point.coord₁`），可以在 FieldDecl 中增加可选的投影名字段 — v10 暂不实现。
+**投影名自动生成规则：** v10 中，投影名由 `qualified_name(typeName, fieldName)` 自动生成。用户在 StructureCmd 中提供 `typeName` 和各字段的 `fieldName`，exec 自动拼接为投影名。例如 `Point` 的字段 `x` → 投影名 `Point.x`。将来若想让用户自定义投影名（如 `Point.x` 也能叫 `Point.coord₁`），可以在 FieldDecl 中增加可选的投影名字段 — v10 暂不实现。
 
 **Method A vs Method B：** v10 采用 **Method A**：投影名只存在于 `State.Projections`（elaboration 元数据），**不**注册到 `State.Axioms`（即 `Const Sigma.a` 不是合法的 CoreTerm）。Method A 的理由：
 1. 若投影名进入 Axioms，就需要为它定义类型（如 `Sigma.a : Π (A : Sort 0), Π (B : Π(x:A), Sort 0), Π (p : Sigma A B), A`）和 whnf reduction rule（如 `App(App(App(Const Sigma.a, A), B), p) ↦ Proj(Sigma, 0, p)`）。这需要修改 kernel 或先有 DefCmd，对 v10 太重了。
@@ -441,19 +452,21 @@ Point:
 
 ### 5.1c `ProjectionInfo` well-formedness invariant                    【v10 新增】
 
-`S.Projections` 中的每个 `ProjectionInfo` 必须满足以下条件：
+`S.Projections` 中的每个 `ProjectionInfo` 必须满足以下条件。若 `S.Projections[g] = proj_info`，记 `g` 为条目 key，`proj_info` 为 ProjectionInfo 值：
 
-1. **投影名不与其他 State 字段冲突：** `projName ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures)`。（注意 `projName` 在 `dom(S.Projections)` 中是允许的——它就是自己的 key。）
+1. **key 一致性：** `proj_info.projectionName = g`。（map 的 key 必须与记录内部的 projectionName 一致。）
 
-2. **所属结构名已注册：** `structName ∈ dom(S.Structures)`。
+2. **投影名不与其他 State 字段冲突：** `g ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures)`。（注意 `g` 在 `dom(S.Projections)` 中是允许的——它就是自己的 key。）
 
-3. **字段下标合法：** `index < len(S.Structures[structName].fields)`。
+3. **所属结构名已注册：** `proj_info.structName ∈ dom(S.Structures)`。
 
-4. **命名一致性（自动命名规则）：** `projName = structName + "." + S.Structures[structName].fields[index].name`。注意：当前模型采用自动命名规则，投影名由 StructureCmd 自动拼接。将来若支持用户自定义投影名，此条件需要放宽。
+4. **字段下标合法：** 令 `info = S.Structures[proj_info.structName]`，则 `proj_info.index < len(info.fields)`。
 
-5. **投影名唯一：** `S.Projections` 中所有 ProjectionInfo 的 `projectionName` 互不相同。
+5. **自动命名一致：** `g = qualified_name(proj_info.structName, S.Structures[proj_info.structName].fields[proj_info.index].name)`。将来若支持用户自定义投影名，此条件需要放宽。
 
-**评论：** 当前模型中所有 ProjectionInfo 都通过 `exec(StructureCmd)` 自动生成——投影名检查（§7.4）保证条件 1、结构名检查保证条件 2、字段下标由 enumerate 遍历保证条件 3、命名规则 `typeName + "." + field.name` 保证条件 4。没有 ProjectionInfo 是预置的，也没有 ProjectionInfo 可以脱离 StructureCmd 手动添加。
+6. **投影名唯一：** 若 `S.Projections[g₁] = p₁` 且 `S.Projections[g₂] = p₂` 且 `p₁.projectionName = p₂.projectionName`，则 `g₁ = g₂`。
+
+**评论：** 当前模型中所有 ProjectionInfo 都通过 `exec(StructureCmd)` 自动生成——投影名检查（§7.4）保证条件 2、结构名检查保证条件 3、字段下标由 enumerate 遍历保证条件 4、命名规则 `qualified_name(typeName, field.name)` 保证条件 5。没有 ProjectionInfo 是预置的，也没有 ProjectionInfo 可以脱离 StructureCmd 手动添加。
 
 ### 5.2 `StructureInfo`
 
@@ -573,7 +586,7 @@ S₀.Projections = {}
 Sigma, Sigma.mk, Prod, Prod.mk : GlobalName
 ```
 
-以及投影名（由 StructureCmd 自动生成，命名规则 = typeName + "." + fieldName）：
+以及投影名（由 StructureCmd 自动生成，命名规则 = qualified_name(typeName, fieldName)）：
 
 ```text
 Sigma.a, Sigma.b, Prod.a, Prod.b : GlobalName
@@ -938,6 +951,26 @@ StructureCmd Point Point.mk
 exec(S : State, cmd : Command) -> State
 ```
 
+### 7.0 辅助函数                                                  【v10 新增】
+
+**名字冲突检查（v10 四字段版本）：**
+
+```python
+# 写作 name_is_used(S, n)
+def name_is_used(S : State, n : GlobalName) -> bool:
+    '''
+    检查名字 n 是否已被 S 的四个名字空间中的任何一个使用。
+    '''
+    return (
+        n in S.Axioms or
+        n in S.Defs or
+        n in S.Structures or
+        n in S.Projections
+    )
+```
+
+此函数在所有命令分支中复用。后续版本扩展 `State` 字段时只需要修改此处即可。
+
 ### 7.1 状态转移记号
 
 约定：
@@ -1128,7 +1161,7 @@ def exec(S: State, cmd: Command) -> State:
         TA = whnf(S, infer_type(S, ∅, A_core))
         if not isinstance(TA, Sort):
             raise Error
-        if n not in S.Axioms and n not in S.Defs and n not in S.Structures and n not in S.Projections:
+        if not name_is_used(S, n):
             return State(
                 Axioms = S.Axioms.set(n, A_core),
                 Defs   = S.Defs,
@@ -1144,7 +1177,7 @@ def exec(S: State, cmd: Command) -> State:
         if not isinstance(TA, Sort):
             raise Error
         t_core = elab(S, ∅, t_surf, A_core)
-        if n in S.Axioms or n in S.Defs or n in S.Structures or n in S.Projections:
+        if name_is_used(S, n):
             raise Error
         if not check_type(S, ∅, t_core, A_core):
             raise Error
@@ -1161,9 +1194,9 @@ def exec(S: State, cmd: Command) -> State:
         # 第一步：名字检查
         if typeName == constructor:
             raise Error                    # typeName 和 constructor 不能相同
-        if typeName in S.Axioms or typeName in S.Defs or typeName in S.Structures or typeName in S.Projections:
+        if name_is_used(S, typeName):
             raise Error
-        if constructor in S.Axioms or constructor in S.Defs or constructor in S.Structures or constructor in S.Projections:
+        if name_is_used(S, constructor):
             raise Error
         # v10 新增：检查投影名不冲突
         projection_names = []
@@ -1173,7 +1206,7 @@ def exec(S: State, cmd: Command) -> State:
                 raise Error                # 投影名不能等于 typeName 或 constructor
             if projName in projection_names:
                 raise Error                # 本次生成的投影名不能重复
-            if projName in S.Axioms or projName in S.Defs or projName in S.Structures or projName in S.Projections:
+            if name_is_used(S, projName):
                 raise Error                # 投影名不能与已有全局名字冲突
             projection_names.append(projName)
 
@@ -1887,24 +1920,120 @@ def whnf(S : State, t : CoreTerm) -> CoreTerm:
 
 本节定义结构投影层面的辅助函数，它们依赖 `subst`（§11）、`whnf`（§12）、`State`（§5）、`StructureInfo`（§5）等后定义的概念。因此放在 §12 之后，而不是 §4a 中（§4a 的函数只依赖 CoreTerm）。
 
-### 12a.1 `subst_many`
+### 12a.0 `FV_range`
 
 ```python
-# 写作 subst_many(t, [(x1,e1), ..., (xn,en)])
-def subst_many(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) -> CoreTerm:
+# 写作 FV_range(sigma)
+def FV_range(sigma : PartialMap[LocalName, CoreTerm]) -> Set[LocalName]:
     '''
-    在 t 中逐个替换多个自由变量。
-    substitutions 是 [(x1, e1), ..., (xn, en)] 列表。
-    实现方式：对 substitutions 列表中的每个 (name, replacement)，
-    依次调用 subst(t, name, replacement)。
-    本文中 subst_many 只用于替换 structure schema variables（§5.2a）。
+    返回 sigma 中所有 replacement term 的自由变量的并集。
     '''
-    for name, replacement in substitutions:
-        t = subst(t, name, replacement)
-    return t
+    result = set()
+    for x in sigma:
+        result = result.union(FV(sigma.get(x)))
+    return result
 ```
 
-**评论：** 实现是逐个替换，不是同时替换。`projection_type` 中的替换对象是 structure schema 的变量名（如 `A`、`B`、`a`、`b`）。`exec(StructureCmd)` 检查了参数名和字段名互不重复（§7.5），保证了同一个 StructureInfo 内的 schema 变量名不相交，因此逐个替换不会导致同名的 schema 变量互相覆盖。严格实现中，应使用 simultaneous substitution 或单独的 `SchemaName` 类型，以彻底避免与对象层 `Γ` 中 `LocalName` 的潜在冲突。本文为简化，仍用 `LocalName` 表示 schema variables；只要求 param/field 名字在同一个 StructureInfo 内互不重复。
+### 12a.1 `subst_simul` — capture-avoiding simultaneous substitution 【v10 修改】
+
+**动机：** 原有的 `subst_many` 是顺序替换——对替换列表中的每对 `(name, replacement)` 依次调用 `subst`。这在 `projection_type` 中可能导致错误：先把 `B` 替换成 `Bfun_val`，再把 `a` 替换成 `Proj(Sigma, 0, target)` 时，可能错误地进入 `Bfun_val` 内部替换其中名为 `a` 的自由变量。这不是预期的行为——应该只替换**原始模板 fieldType** 中的 schema variables，不应递归进入 replacement term。
+
+因此引入 capture-avoiding simultaneous substitution：
+
+```python
+# 写作 subst_simul(t, sigma)
+def subst_simul(t : CoreTerm, sigma : PartialMap[LocalName, CoreTerm]) -> CoreTerm:
+    '''
+    Capture-avoiding simultaneous substitution.
+    只替换 t 原始结构中的自由变量；
+    不继续替换 replacement term 内部的变量。
+    '''
+
+    if isinstance(t, Const):
+        return t
+
+    if isinstance(t, Sort):
+        return t
+
+    if isinstance(t, Var):
+        x = t.args              # t = Var x
+        if x in sigma:
+            return sigma.get(x)
+        return t
+
+    if isinstance(t, App):
+        f, a = t.args
+        return App(
+            subst_simul(f, sigma),
+            subst_simul(a, sigma)
+        )
+
+    if isinstance(t, Proj):
+        structName, index, target = t.args
+        return Proj(
+            structName,
+            index,
+            subst_simul(target, sigma)
+        )
+
+    if isinstance(t, Lam):
+        x, A, body = t.args     # t = Lam(x, A, body)
+
+        A1 = subst_simul(A, sigma)
+
+        # binder x 遮蔽 sigma 中对 x 的替换
+        sigma_body = sigma.clone()
+        if x in sigma_body:
+            del sigma_body[x]
+
+        # 若 x 出现在任何 replacement 的自由变量中，需要 alpha-rename
+        if x in FV_range(sigma_body):
+            z = fresh_local_name(FV(body).union(FV(A)).union(FV_range(sigma_body)).union(set(sigma_body.keys())).union({x}))
+            body_z = alpha_rename_binder(body, x, z)
+            return Lam(z, A1, subst_simul(body_z, sigma_body))
+
+        return Lam(x, A1, subst_simul(body, sigma_body))
+
+    if isinstance(t, Forall):
+        x, A, B = t.args        # t = Forall(x, A, B)
+
+        A1 = subst_simul(A, sigma)
+
+        sigma_body = sigma.clone()
+        if x in sigma_body:
+            del sigma_body[x]
+
+        if x in FV_range(sigma_body):
+            z = fresh_local_name(FV(B).union(FV(A)).union(FV_range(sigma_body)).union(set(sigma_body.keys())).union({x}))
+            B_z = alpha_rename_binder(B, x, z)
+            return Forall(z, A1, subst_simul(B_z, sigma_body))
+
+        return Forall(x, A1, subst_simul(B, sigma_body))
+
+    raise Error
+```
+
+**`subst_many` 接口保持不变，内部改用 simultaneous substitution：**
+
+```python
+# 写作 subst_many(t, substitutions)
+def subst_many(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) -> CoreTerm:
+    '''
+    在 t 中同时替换多个自由变量。
+    内部构建 sigma map 后调用 subst_simul。
+    若 substitutions 中有重复名字，raise Error。
+    '''
+    sigma = PartialMap.empty()
+    for name, replacement in substitutions:
+        if name in sigma:
+            raise Error           # 不允许重复名字
+        sigma = sigma.set(name, replacement)
+    return subst_simul(t, sigma)
+```
+
+**评论：** `subst_simul` 是真正的 simultaneous substitution——只替换原始 template 中的自由变量，不递归进入 replacement term。在 `Lam`/`Forall` 中，binder 名字会从 sigma 中移除（shadowing），若 binder 名字出现在 replacement term 的自由变量中则 alpha-rename（capture avoidance）。
+
+`projection_type` 中的替换对象是 structure schema 的变量名（如 `A`、`B`、`a`、`b`）。这些变量只出现在 `FieldInfo.type` 模板的自由变量位置——不嵌套在 Lam/Forall binder 下作为绑定的对象变量。因此 `subst_simul` 在实际使用中只走 `Var` 分支：找到模板中的 `Var A`，替换为 `A_val`；找到 `Var B`，替换为 `Bfun_val`；找到 `Var a`，替换为 `Proj(Sigma, 0, target)`。replacement term 内部不会进一步被替换——这正是 simultaneous substitution 保证的。
 
 ### 12a.2 `match_structure_type`
 
@@ -2619,7 +2748,7 @@ constructor_type = make_constructor_type(info)
 
 **第四步：ProjectionInfo 生成**（v10 新增）
 
-投影名自动生成规则：`typeName + "." + fieldName`。当前模型中 Sigma 的字段名是 `a` 和 `b`（§5a.2），所以投影名是 `Sigma.a` 和 `Sigma.b`（不是 Lean 的 `Sigma.fst` 和 `Sigma.snd` — 因为 Lean 中 Sigma 的字段名是 `fst` 和 `snd`）。
+投影名自动生成规则：`qualified_name(typeName, fieldName)`。当前模型中 Sigma 的字段名是 `a` 和 `b`（§5a.2），所以投影名是 `Sigma.a` 和 `Sigma.b`（不是 Lean 的 `Sigma.fst` 和 `Sigma.snd` — 因为 Lean 中 Sigma 的字段名是 `fst` 和 `snd`）。
 
 ```text
 ProjectionInfo(Sigma.a, Sigma, 0)    # 字段 a → 投影名 Sigma.a
@@ -3356,7 +3485,7 @@ exec(StructureCmd) 调用辅助函数 + elab + infer_type（§7.4）：
   - telescope 检查中，调用 whnf + infer_type 验证类型是 Sort
   - 类型生成中，调用 make_structure_type 构造 type constructor 类型（§5b.3）
   - 类型生成中，调用 make_constructor_type 构造 constructor 类型（§5b.4）
-  - ProjectionInfo 生成中，自动拼接投影名 typeName + "." + fieldName（§7.4 第四步，v10 新增）
+  - ProjectionInfo 生成中，自动生成投影名 qualified_name(typeName, fieldName)（§7.4 第四步，v10 新增）
 ```
 
 ### 17.4 和 Lean 的对应
