@@ -251,44 +251,9 @@ Proj(Point, 1, point)   // 第 1 个字段（y）
 ---
 ## 4a. 辅助函数（CoreTerm 层面）
 
-本节定义几个只依赖 CoreTerm 的辅助函数。结构投影相关的辅助函数（`subst_many`、`match_structure_type`、`projection_type`）依赖 `subst`（§11）、`whnf`（§12）、`State`（§5）等后定义的概念，因此放在 §12a（在 `whnf` 之后定义）。
+本节定义只依赖 CoreTerm 的辅助函数。结构投影相关的辅助函数（`is_sigma_type`、`mk_sigma_type`、`mk_sigma_mk`、`subst_many`、`match_structure_type`、`projection_type`）依赖 `Sigma`（§15b.1）、`subst`（§11）、`whnf`（§12）、`State`（§5）等后定义的概念，因此放在 §12a（在 `whnf` 之后、`Sigma` 定义之后）。
 
-### 4a.1 `is_sigma_type`
-
-```python
-# 写作 is_sigma_type(t)
-def is_sigma_type(t : CoreTerm) -> Optional[Pair[CoreTerm, CoreTerm]]:
-    '''
-    如果 t = App(App(Const Sigma, A), Bfun)，返回 Pair(A, Bfun)
-    否则返回 None
-    此函数只做模式匹配，不调用 whnf（调用者需要预先 whnf 输入）。
-    当前模型中此函数仍用于 elab 的 Sigma 专属分支。
-    一般化的类型识别应使用 match_structure_type（§12a.2）。
-    '''
-    if isinstance(t, App):
-        f_B, Bfun = t.args
-        if isinstance(f_B, App):
-            f_A, A = f_B.args
-            if isinstance(f_A, Const) and f_A.args == Sigma:
-                return Pair(A, Bfun)
-    return None
-```
-
-也就是说：
-
-```text
-is_sigma_type((Const Sigma) A Bfun) = Pair(A, Bfun)
-```
-
-其中 `Bfun` 通常是一个 lambda：
-
-```text
-Bfun = fun (x : A) => B_body
-```
-
-**评论：** is_sigma_type is used only in elab's Sigma-specific branch (§15a); general type identification uses match_structure_type (§12a.2).
-
-### 4a.2 `collect_app`
+### 4a.1 `collect_app`
 
 ```python
 # 写作 collect_app(t)
@@ -313,29 +278,6 @@ Pair(Const Sigma.mk, [A, B, a, b])
 ```
 
 **评论：** 这个函数在 `whnf` 的 `Proj` 分支中用于识别构造子应用。因为 constructor application 在 CoreTerm 里就是嵌套 `App`，没有特殊构造子。
-
-### 4a.3 元语言辅助函数
-
-为了写例子方便，定义两个**元语言**辅助函数（不是 CoreTerm 构造子）：
-
-```python
-# 写作 mk_sigma_type(A, Bfun)
-def mk_sigma_type(A : CoreTerm, Bfun : CoreTerm) -> CoreTerm:
-    return App(App(Const(Sigma), A), Bfun)
-
-# 写作 mk_sigma_mk(A, Bfun, a, b)
-def mk_sigma_mk(A : CoreTerm, Bfun : CoreTerm, a : CoreTerm, b : CoreTerm) -> CoreTerm:
-    return App(App(App(App(Const(Sigma.mk), A), Bfun), a), b)
-```
-
-即：
-
-```text
-mk_sigma_type(A, Bfun) = (Const Sigma) A Bfun
-mk_sigma_mk(A, Bfun, a, b) = (Const Sigma.mk) A Bfun a b
-```
-
-这些只是元语言函数，不是新的 CoreTerm 构造子。
 
 ---
 ## 5. `State` 与 `StructureInfo`
@@ -1725,9 +1667,61 @@ def whnf(S : State, t : CoreTerm) -> CoreTerm:
 
 ## 12a. 辅助函数（结构投影层面）
 
-本节定义结构投影层面的辅助函数，它们依赖 `subst`（§11）、`whnf`（§12）、`State`（§5）、`StructureInfo`（§5）等后定义的概念。因此放在 §12 之后，而不是 §4a 中（§4a 的函数只依赖 CoreTerm）。
+本节定义结构投影层面的辅助函数。它们的共同点是依赖后定义的概念——`Sigma`（§15b.1）、`State`（§5）、`StructureInfo`（§5.2）、`subst`（§11）、`whnf`（§12）——因此放在 §12 之后，而不是 §4a 中（§4a 只放纯 CoreTerm 函数 `collect_app`）。
 
-### 12a.1 `subst_many`
+### 12a.1 `is_sigma_type`
+
+```python
+# 写作 is_sigma_type(t)
+def is_sigma_type(t : CoreTerm) -> Optional[Pair[CoreTerm, CoreTerm]]:
+    '''
+    如果 t = App(App(Const Sigma, A), Bfun)，返回 Pair(A, Bfun)
+    否则返回 None
+    此函数只做模式匹配，不调用 whnf（调用者需要预先 whnf 输入）。
+    当前模型中此函数仍用于 elab 的 Sigma 专属分支。
+    一般化的类型识别应使用 match_structure_type（§12a.4）。
+    '''
+    if isinstance(t, App):
+        f_B, Bfun = t.args
+        if isinstance(f_B, App):
+            f_A, A = f_B.args
+            if isinstance(f_A, Const) and f_A.args == Sigma:
+                return Pair(A, Bfun)
+    return None
+```
+
+也就是说：
+
+```text
+is_sigma_type((Const Sigma) A Bfun) = Pair(A, Bfun)
+```
+
+其中 `Bfun` 通常是一个 lambda：`Bfun = fun (x : A) => B_body`。
+
+### 12a.2 元语言辅助函数（Sigma 专用）
+
+为了写例子方便，定义两个**元语言**辅助函数（不是 CoreTerm 构造子）：
+
+```python
+# 写作 mk_sigma_type(A, Bfun)
+def mk_sigma_type(A : CoreTerm, Bfun : CoreTerm) -> CoreTerm:
+    return App(App(Const(Sigma), A), Bfun)
+
+# 写作 mk_sigma_mk(A, Bfun, a, b)
+def mk_sigma_mk(A : CoreTerm, Bfun : CoreTerm, a : CoreTerm, b : CoreTerm) -> CoreTerm:
+    return App(App(App(App(Const(Sigma.mk), A), Bfun), a), b)
+```
+
+即：
+
+```text
+mk_sigma_type(A, Bfun) = (Const Sigma) A Bfun
+mk_sigma_mk(A, Bfun, a, b) = (Const Sigma.mk) A Bfun a b
+```
+
+这些只是元语言函数，不是新的 CoreTerm 构造子。
+
+### 12a.3 `subst_many`
 
 ```python
 # 写作 subst_many(t, [(x1,e1), ..., (xn,en)])
@@ -1746,7 +1740,7 @@ def subst_many(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) ->
 
 **评论：** 实现是逐个替换，不是同时替换。`projection_type` 中的替换对象是 structure schema 的变量名（如 `A`、`B`、`a`、`b`）。`exec(StructureCmd)` 检查了参数名和字段名互不重复（§7.5），保证了同一个 StructureInfo 内的 schema 变量名不相交，因此逐个替换不会导致同名的 schema 变量互相覆盖。严格实现中，应使用 simultaneous substitution 或单独的 `SchemaName` 类型，以彻底避免与对象层 `Γ` 中 `LocalName` 的潜在冲突。本文为简化，仍用 `LocalName` 表示 schema variables；只要求 param/field 名字在同一个 StructureInfo 内互不重复。
 
-### 12a.2 `match_structure_type`
+### 12a.4 `match_structure_type`
 
 ```python
 # 写作 match_structure_type(S, structName, T)
@@ -1768,9 +1762,9 @@ def match_structure_type(S : State, structName : GlobalName, T : CoreTerm) -> Op
     return args
 ```
 
-**评论：** 此函数是 `is_sigma_type`（§4a.1）的一般化。`match_structure_type(S, Sigma, T)` 的结果与 `is_sigma_type(T)` 类似 — 但它能处理任何结构。两者有三个重要区别：(1) `match_structure_type` 内部调用 `whnf`，而 `is_sigma_type` 不调用（需要调用者预先 whnf）；(2) `match_structure_type` 返回所有参数值的列表 `[A_val, Bfun_val]`，而 `is_sigma_type` 返回 `Pair(A_val, Bfun_val)`；(3) `match_structure_type` 检查 `S.Structures` 中是否注册了该结构，而 `is_sigma_type` 不检查。严格相等 `len(args) != len(info.params)` 确保部分应用的结构类型不会被匹配。
+**评论：** 此函数是 `is_sigma_type`（§12a.1）的一般化。`match_structure_type(S, Sigma, T)` 的结果与 `is_sigma_type(T)` 类似 — 但它能处理任何结构。两者有三个重要区别：(1) `match_structure_type` 内部调用 `whnf`，而 `is_sigma_type` 不调用（需要调用者预先 whnf）；(2) `match_structure_type` 返回所有参数值的列表 `[A_val, Bfun_val]`，而 `is_sigma_type` 返回 `Pair(A_val, Bfun_val)`；(3) `match_structure_type` 检查 `S.Structures` 中是否注册了该结构，而 `is_sigma_type` 不检查。严格相等 `len(args) != len(info.params)` 确保部分应用的结构类型不会被匹配。
 
-### 12a.3 `projection_type`
+### 12a.5 `projection_type`
 
 ```python
 # 写作 projection_type(S, Γ, info, index, target, params)
@@ -2236,7 +2230,7 @@ def check_type(S: State, Γ: Context, t: CoreTerm, A: CoreTerm) -> bool:
   3. 最终得到 `App(App(Const Sigma, A), Bfun)` 即 Sigma 类型。
   整个过程由 Const + App 规则自动处理，不需要专门的 CPairTyped 分支。
 
-- **Proj 的类型推断** 已一般化。`match_structure_type(S, structName, Ttarget)`（定义在 §12a.2）从目标类型中提取结构参数值，`projection_type(S, Γ, info, index, target, params)`（定义在 §12a.3）用 `FieldInfo.type` 模板计算字段类型。两者对任何在 `S.Structures` 中注册的结构都适用。
+- **Proj 的类型推断** 已一般化。`match_structure_type(S, structName, Ttarget)`（定义在 §12a.4）从目标类型中提取结构参数值，`projection_type(S, Γ, info, index, target, params)`（定义在 §12a.5）用 `FieldInfo.type` 模板计算字段类型。两者对任何在 `S.Structures` 中注册的结构都适用。
 
 - **一般化机制对 Sigma 的工作方式：** 对于 `Proj(Sigma, 0, p)`：
   1. `match_structure_type(S, Sigma, Ttarget)` 从 `p` 的类型中提取 `[A_val, Bfun_val]`。
@@ -3008,8 +3002,8 @@ elab 调用辅助函数：
   - SPair 规则中，调用 is_sigma_type 识别 Sigma 类型，调用 mk_sigma_mk 构造 Sigma.mk 应用
 
 infer_type 调用辅助函数（§12a）：
-  - Proj 规则中，调用 match_structure_type 匹配结构类型、提取参数值（§12a.2）
-  - Proj 规则中，调用 projection_type 从 StructureInfo 的 fields 中计算字段类型（§12a.3）
+  - Proj 规则中，调用 match_structure_type 匹配结构类型、提取参数值（§12a.4）
+  - Proj 规则中，调用 projection_type 从 StructureInfo 的 fields 中计算字段类型（§12a.5）
 
 infer_type 调用 check_type：
   - App 规则中，检查参数类型
