@@ -338,16 +338,15 @@ StructureInfo(
 
 ### 5.2a `StructureInfo` well-formedness invariant           【v9 修改】
 
-`S.Structures` 中的每个 `StructureInfo` 必须满足以下条件：
+每个 `StructureInfo` 必须满足以下条件（这些条件由 `exec(StructureCmd)` 在生成时自动保证，见 §7.4）：
 
-1. **类型名和构造子名已注册：** `info.typeName` 和 `info.constructor` 必须存在于 `S.Axioms` 或 `S.Defs` 中。
-2. **参数名互不相同：** `info.params` 中所有 `ParamInfo.name` 互不相等。
-3. **字段名互不相同：** `info.fields` 中所有 `FieldInfo.name` 互不相等。
-4. **参数名和字段名互不相同：** 任何 `ParamInfo.name` 不等于任何 `FieldInfo.name`。
-5. **ParamInfo.type 的自由 schema variables 只引用前序 params：** `FV(info.params[i].type) ⊆ { info.params[0].name, ..., info.params[i-1].name }`。注意：此处说的是**自由变量**（FV），不是所有 `Var`。被 `Forall` 或 `Lam` binder 绑定的 `Var`（如 `Π (x : Var A), Sort 0` 中的 `Var x`）不是 schema variable，不受此约束。
-6. **FieldInfo.type 的自由 schema variables 只引用 params 和前序 fields：** `FV(info.fields[j].type) ⊆ { param names } ∪ { info.fields[0].name, ..., info.fields[j-1].name }`。
-7. **构造子参数顺序：** `info.constructor` 的类型签名中的参数顺序必须是先 `params` 后 `fields`。
-8. **构造子返回类型：** `info.constructor` 的类型签名的返回类型必须是 `(Const info.typeName)` 应用到所有参数变量上，即 `make_type_app(info.typeName, [param.name for param in info.params])`。
+1. **参数名互不相同：** `info.params` 中所有 `ParamInfo.name` 互不相等。
+2. **字段名互不相同：** `info.fields` 中所有 `FieldInfo.name` 互不相等。
+3. **参数名和字段名互不相同：** 任何 `ParamInfo.name` 不等于任何 `FieldInfo.name`。
+4. **ParamInfo.type 的自由 schema variables 只引用前序 params：** `FV(info.params[i].type) ⊆ { info.params[0].name, ..., info.params[i-1].name }`。注意：此处说的是**自由变量**（FV），不是所有 `Var`。被 `Forall` 或 `Lam` binder 绑定的 `Var`（如 `Π (x : Var A), Sort 0` 中的 `Var x`）不是 schema variable，不受此约束。
+5. **FieldInfo.type 的自由 schema variables 只引用 params 和前序 fields：** `FV(info.fields[j].type) ⊆ { param names } ∪ { info.fields[0].name, ..., info.fields[j-1].name }`。
+6. **构造子参数顺序：** `info.constructor` 的类型签名中的参数顺序必须是先 `params` 后 `fields`。
+7. **构造子返回类型：** `info.constructor` 的类型签名的返回类型必须是 `(Const info.typeName)` 应用到所有参数变量上，即 `make_type_app(info.typeName, [param.name for param in info.params])`。
 
 **例子（Sigma）：**
 
@@ -363,7 +362,7 @@ fields:
 
 注意 `b` 可以引用 `a`（因为 `a` 是前序字段），但 `a` 不能引用 `b`（因为 `b` 是后续字段）。这保证了 `projection_type` 的替换是完整的 — 所有 schema 变量都能被参数值和前序投影替换掉，不存在未解释的 schema variable。
 
-**评论：** v9 中所有 StructureInfo 都通过 `exec(StructureCmd)` 生成 — telescope 检查保证每个参数/字段类型都是 Sort（即 universe level 可计算），参数和字段的名字互不重复，字段类型模板中的 Var 引用只指向参数名或前序字段名。没有 StructureInfo 是预置的。
+**评论：** 这些条件是每个 `StructureInfo` 自身的 well-formedness 条件，不依赖 `State`。v9 中所有 StructureInfo 都通过 `exec(StructureCmd)` 生成 — telescope 检查（§7.4）自动保证参数/字段类型都是 Sort（即 universe level 可计算），参数和字段的名字互不重复，字段类型模板中的 Var 引用只指向参数名或前序字段名。没有 StructureInfo 是预置的。条件 6 和 7 由 `make_constructor_type`（§5b.4）自动保证。
 
 ### 5.3 `State`
 
