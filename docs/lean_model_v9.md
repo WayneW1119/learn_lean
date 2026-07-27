@@ -675,6 +675,8 @@ StructureCmd Point Point.mk
 ---
 ## 7. 状态执行函数 `exec`
 
+> **前向引用说明：** `exec` 内部调用 `elab`（§15a）和 `infer_type`/`check_type`（§14），这些函数在文档后面才定义。这是不可避免的——文档按依赖关系的反向顺序组织：先定义底层 kernel 函数（`whnf`、`defeq`、`infer_type`），再定义上层（`elab`、`exec`）。`exec` 出现在这里是因为它紧跟在 `Command`（§6）定义之后，便于读者理解命令如何执行。阅读时可将 `elab` 和 `infer_type` 视为已定义的黑箱。
+
 定义一个部分函数：
 
 ```text
@@ -946,7 +948,7 @@ def exec(S: State, cmd: Command) -> State:
     raise Error
 ```
 
-`elab` 在 §15a 定义。这是一个不可避免的前向引用：`exec` 处理用户输入（SurfaceTerm），必须调用 `elab` 来转换；而 `elab` 又调用 `infer_type`/`check_type`（§14）来验证类型。概念上，`exec` → `elab` → `infer_type/check_type` → `whnf/defeq`。文档按照依赖关系的反向顺序排列：先定义底层（`whnf`、`defeq`、`infer_type`），再定义上层（`elab`、`exec`）。
+（关于 `elab` 和 `infer_type` 的前向引用说明见 §7 开头。）
 
 ---
 ## 5a. 初始状态与结构缩写                                      【v9 修改】
