@@ -5,7 +5,7 @@
 > * §5a：预置状态完全取消；Sigma 和 Prod 都通过 StructureCmd 定义（SΣ 和 SΣΠ 变为方便缩写）
 > * §5b（新增章节）：类型生成辅助函数 `make_forall_chain`、`make_type_app`、`make_structure_type`、`make_constructor_type`
 > * §6：新增 `StructureCmd` 命令、`ParamDecl` 和 `FieldDecl` 数据类型
-> * §7：`exec` 新增 `StructureCmd` 分支 — 自动生成 type constructor、constructor 和 StructureInfo
+> * §8：`exec` 新增 `StructureCmd` 分支 — 自动生成 type constructor、constructor 和 StructureInfo
 > * §15：前置状态 `S` 现在包含 `StructureCmd Prod` 步骤
 > * §15b（新增章节）：`StructureCmd` 的完整例子（Point、UnitLike、Prod）
 > * §19.6 / §20.5：新增 Point 的 whnf 和 defeq 例子
@@ -338,7 +338,7 @@ StructureInfo(
 
 ### 5.2a `StructureInfo` well-formedness invariant           【v9 修改】
 
-每个 `StructureInfo` 必须满足以下条件（这些条件由 `exec(StructureCmd)` 在生成时自动保证，见 §7.4）：
+每个 `StructureInfo` 必须满足以下条件（这些条件由 `exec(StructureCmd)` 在生成时自动保证，见 §8.4）：
 
 1. **参数名互不相同：** `info.params` 中所有 `ParamInfo.name` 互不相等。
 2. **字段名互不相同：** `info.fields` 中所有 `FieldInfo.name` 互不相等。
@@ -362,7 +362,7 @@ fields:
 
 注意 `b` 可以引用 `a`（因为 `a` 是前序字段），但 `a` 不能引用 `b`（因为 `b` 是后续字段）。这保证了 `projection_type` 的替换是完整的 — 所有 schema 变量都能被参数值和前序投影替换掉，不存在未解释的 schema variable。
 
-**评论：** 这些条件是每个 `StructureInfo` 自身的 well-formedness 条件，不依赖 `State`。v9 中所有 StructureInfo 都通过 `exec(StructureCmd)` 生成 — telescope 检查（§7.4）自动保证参数/字段类型都是 Sort（即 universe level 可计算），参数和字段的名字互不重复，字段类型模板中的 Var 引用只指向参数名或前序字段名。没有 StructureInfo 是预置的。条件 6 和 7 由 `make_constructor_type`（§5b.4）自动保证。
+**评论：** 这些条件是每个 `StructureInfo` 自身的 well-formedness 条件，不依赖 `State`。v9 中所有 StructureInfo 都通过 `exec(StructureCmd)` 生成 — telescope 检查（§8.4）自动保证参数/字段类型都是 Sort（即 universe level 可计算），参数和字段的名字互不重复，字段类型模板中的 Var 引用只指向参数名或前序字段名。没有 StructureInfo 是预置的。条件 6 和 7 由 `make_constructor_type`（§5b.4）自动保证。
 
 ### 5.3 `State`
 
@@ -395,7 +395,7 @@ S.Structures
 
 本节定义四个辅助函数，用于从 `StructureInfo` 生成 type constructor 和 constructor 的 CoreTerm 类型。它们只依赖 `CoreTerm`（§4）和 `StructureInfo`/`ParamInfo`/`FieldInfo`（§5）— 不调用 `elab`、`whnf`、`infer_type`。
 
-`exec(StructureCmd)` 会调用这些函数（§7），把生成的类型写入 `S.Axioms`。
+`exec(StructureCmd)` 会调用这些函数（§8），把生成的类型写入 `S.Axioms`。
 
 ### 5b.1 `make_forall_chain`
 
@@ -673,7 +673,30 @@ StructureCmd Point Point.mk
 用户写 `SurfaceTerm`；`exec` 会先通过 `elab` 转换为 `CoreTerm` 再存储。
 
 ---
-## 7. 状态执行函数 `exec`
+## 7. `Context`
+
+定义上下文类型 `Context`：
+
+```text
+class Context:
+    Types : PartialMap[n : LocalName, t : CoreTerm]   # 写作 n : t
+```
+
+若 `Γ : Context`，则 `Γ.Types` 表示这个上下文中记录局部变量类型的映射。
+
+### 7.1 上下文扩展
+
+```python
+# 写作 Γ, x : A
+# 也写作 expand_context(Γ, x, A)
+def expand_context(Γ : Context, x : LocalName, A : CoreTerm) -> Context:
+    return Context(
+        Types = Γ.Types[x -> A]
+    )
+```
+
+---
+## 8. 状态执行函数 `exec`
 
 > **前向引用说明：** `exec` 内部调用以下函数，它们都在文档后面才详细定义。这里给出每个函数的简要功能，阅读时可将它们视为已定义的操作：
 >
@@ -683,7 +706,6 @@ StructureCmd Point Point.mk
 > | `infer_type(S, Γ, t)` | 推断 CoreTerm 的类型 | §14 |
 > | `check_type(S, Γ, t, A)` | 检查 CoreTerm 是否具有给定类型 | §14 |
 > | `whnf(S, t)` | 弱头部正规化（化简 term） | §12 |
-> | `expand_context(Γ, x, A)` | 向局部上下文 Γ 中绑定 x : A | §8.1 |
 >
 > 文档按依赖关系的反向顺序组织：先定义底层 kernel 函数（`whnf`、`defeq`、`infer_type`），再定义上层（`elab`、`exec`）。`exec` 紧跟在 `Command`（§6）定义之后，便于读者理解命令如何执行。
 
@@ -693,7 +715,7 @@ StructureCmd Point Point.mk
 exec(S : State, cmd : Command) -> State
 ```
 
-### 7.1 状态转移记号
+### 8.1 状态转移记号
 
 约定：
 
@@ -703,7 +725,7 @@ S --cmd--> S'
 
 作为 `exec(S, cmd) = S'` 的简写。
 
-### 7.2 规则 1：执行 `AxiomCmd`
+### 8.2 规则 1：执行 `AxiomCmd`
 
 若：
 
@@ -734,7 +756,7 @@ S' = State(
 
 **评论：** `infer_type(S, ∅, A_core) : Sort u` 确保声明的类型本身是一个 type。否则用户可以错误地声明 `AxiomCmd bad : Const zero` — `Const zero : Const Nat` 不是 type。此外，v7 新增了 `S.Structures`，新名字也不应与已有结构名冲突。
 
-### 7.3 规则 2：执行 `DefCmd`
+### 8.3 规则 2：执行 `DefCmd`
 
 若：
 
@@ -765,7 +787,7 @@ S' = State(
 )
 ```
 
-### 7.4 规则 3：执行 `StructureCmd`                            【v9 新增】
+### 8.4 规则 3：执行 `StructureCmd`                            【v9 新增】
 
 若：
 
@@ -843,7 +865,7 @@ S' = State(
 - `make_structure_type` 和 `make_constructor_type` 在 §5b 定义，只依赖 CoreTerm 和 StructureInfo。它们不调用 elab/whnf/infer_type。
 - 第三步新增对生成类型的验证：`type_type` 和 `constructor_type` 都必须通过 `infer_type` 检查（结果必须是 Sort）。`constructor_type` 的返回类型中引用 `Const typeName`，所以需要先临时将 `typeName` 加入状态，才能正确验证 `constructor_type`。这防止了 `make_constructor_type` 的潜在 bug 导致 ill-typed 的 constructor type 被写入 Axioms。
 
-### 7.5 `exec` 完整代码                                         【v9 修改】
+### 8.5 `exec` 完整代码                                         【v9 修改】
 
 ```python
 # 写作 exec(S, cmd)
@@ -958,7 +980,7 @@ def exec(S: State, cmd: Command) -> State:
     raise Error
 ```
 
-（关于 `elab` 和 `infer_type` 的前向引用说明见 §7 开头。）
+（关于 `elab` 和 `infer_type` 的前向引用说明见 §8 开头。）
 
 ---
 ## 5a. 初始状态与结构缩写                                      【v9 修改】
@@ -1043,29 +1065,6 @@ SΣ.Structures = {
 ```
 
 **评论：** `Sigma` 不是模型宇宙里自动存在的魔法对象。v9 中 `Sigma` 的类型签名和 StructureInfo 由 `exec(StructureCmd Sigma Sigma.mk ...)` 自动生成 — 不再预置。这类似于 Lean 的 prelude，但 prelude 中的结构声明在 v9 中由 StructureCmd 显式执行，而非隐式硬编码。
-
----
-## 8. `Context`
-
-定义上下文类型 `Context`：
-
-```text
-class Context:
-    Types : PartialMap[n : LocalName, t : CoreTerm]   # 写作 n : t
-```
-
-若 `Γ : Context`，则 `Γ.Types` 表示这个上下文中记录局部变量类型的映射。
-
-### 8.1 上下文扩展
-
-```python
-# 写作 Γ, x : A
-# 也写作 expand_context(Γ, x, A)
-def expand_context(Γ : Context, x : LocalName, A : CoreTerm) -> Context:
-    return Context(
-        Types = Γ.Types[x -> A]
-    )
-```
 
 ---
 ## 9. `HasType` 的具体定义
@@ -1749,7 +1748,7 @@ def subst_many(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) ->
     return t
 ```
 
-**评论：** 实现是逐个替换，不是同时替换。`projection_type` 中的替换对象是 structure schema 的变量名（如 `A`、`B`、`a`、`b`）。`exec(StructureCmd)` 检查了参数名和字段名互不重复（§7.5），保证了同一个 StructureInfo 内的 schema 变量名不相交，因此逐个替换不会导致同名的 schema 变量互相覆盖。严格实现中，应使用 simultaneous substitution 或单独的 `SchemaName` 类型，以彻底避免与对象层 `Γ` 中 `LocalName` 的潜在冲突。本文为简化，仍用 `LocalName` 表示 schema variables；只要求 param/field 名字在同一个 StructureInfo 内互不重复。
+**评论：** 实现是逐个替换，不是同时替换。`projection_type` 中的替换对象是 structure schema 的变量名（如 `A`、`B`、`a`、`b`）。`exec(StructureCmd)` 检查了参数名和字段名互不重复（§8.5），保证了同一个 StructureInfo 内的 schema 变量名不相交，因此逐个替换不会导致同名的 schema 变量互相覆盖。严格实现中，应使用 simultaneous substitution 或单独的 `SchemaName` 类型，以彻底避免与对象层 `Γ` 中 `LocalName` 的潜在冲突。本文为简化，仍用 `LocalName` 表示 schema variables；只要求 param/field 名字在同一个 StructureInfo 内互不重复。
 
 ### 12a.4 `match_structure_type`
 
@@ -2335,7 +2334,7 @@ S ; Γ ⊢ App (Const choosePred, Const zero) : App (Const Pred, Const zero)
 
 ## 15b. StructureCmd 例子                                    【v9 新增】
 
-本节展示 `StructureCmd` 的完整执行过程，逐步骤对照 §7.4 中的四步规则。
+本节展示 `StructureCmd` 的完整执行过程，逐步骤对照 §8.4 中的四步规则。
 
 ### 15b.1 StructureCmd Sigma（依值结构）— v9 的核心例子
 
@@ -3022,7 +3021,7 @@ infer_type 调用 check_type：
 check_type 调用 infer_type：
   - 默认分支：先 infer 再 defeq 比较
 
-exec(StructureCmd) 调用辅助函数 + elab + infer_type（§7.4，v9 新增）：
+exec(StructureCmd) 调用辅助函数 + elab + infer_type（§8.4，v9 新增）：
   - telescope 检查中，调用 elab elaborate 参数/字段类型
   - telescope 检查中，调用 whnf + infer_type 验证类型是 Sort
   - 类型生成中，调用 make_structure_type 构造 type constructor 类型（§5b.3）
