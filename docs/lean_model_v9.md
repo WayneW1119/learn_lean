@@ -675,7 +675,17 @@ StructureCmd Point Point.mk
 ---
 ## 7. 状态执行函数 `exec`
 
-> **前向引用说明：** `exec` 内部调用 `elab`（§15a）和 `infer_type`/`check_type`（§14），这些函数在文档后面才定义。这是不可避免的——文档按依赖关系的反向顺序组织：先定义底层 kernel 函数（`whnf`、`defeq`、`infer_type`），再定义上层（`elab`、`exec`）。`exec` 出现在这里是因为它紧跟在 `Command`（§6）定义之后，便于读者理解命令如何执行。阅读时可将 `elab` 和 `infer_type` 视为已定义的黑箱。
+> **前向引用说明：** `exec` 内部调用以下函数，它们都在文档后面才详细定义。这里给出每个函数的简要功能，阅读时可将它们视为已定义的操作：
+>
+> | 函数 | 简要功能 | 详细定义 |
+> |------|---------|---------|
+> | `elab(S, Γ, st, expected)` | 将 SurfaceTerm 转换为 CoreTerm（elaboration） | §15a |
+> | `infer_type(S, Γ, t)` | 推断 CoreTerm 的类型 | §14 |
+> | `check_type(S, Γ, t, A)` | 检查 CoreTerm 是否具有给定类型 | §14 |
+> | `whnf(S, t)` | 弱头部正规化（化简 term） | §12 |
+> | `expand_context(Γ, x, A)` | 向局部上下文 Γ 中绑定 x : A | §8.1 |
+>
+> 文档按依赖关系的反向顺序组织：先定义底层 kernel 函数（`whnf`、`defeq`、`infer_type`），再定义上层（`elab`、`exec`）。`exec` 紧跟在 `Command`（§6）定义之后，便于读者理解命令如何执行。
 
 定义一个部分函数：
 
