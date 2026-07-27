@@ -391,90 +391,6 @@ S.Structures
 注意：`S.Structures.get(Sigma)` 不是天生存在的。它必须来自某个具体状态。v9 中 Sigma 的 StructureInfo 来自 `exec(StructureCmd Sigma ...)`（见 §15b.1），不再预置。
 
 ---
-## 5a. 初始状态与结构缩写                                      【v9 修改】
-
-### 5a.1 初始状态 S₀
-
-v9 不再预置任何结构。初始状态为空：
-
-```text
-S₀.Axioms = {}
-S₀.Defs = {}
-S₀.Structures = {}
-```
-
-所有结构（包括 Sigma 和 Prod）都通过 StructureCmd 定义（见 §15b）。
-
-为后续引用方便，取全局名字：
-
-```text
-Sigma, Sigma.mk, Prod, Prod.mk : GlobalName
-```
-
-这些名字在 StructureCmd 中由用户提供（见 §6）。并要求所有名字互不相同。
-
-当前模型暂时**不引入** `Sigma.fst / Sigma.snd / Prod.fst / Prod.snd`。因为 `Proj(Sigma, 0, p)` 和 `Proj(Sigma, 1, p)` 已经表达了投影。
-
-### 5a.2 `Sigma` 与 `Sigma.mk` 的类型
-
-为避免 universe polymorphism，当前模型使用单宇宙版本。以下类型由 StructureCmd Sigma 自动生成（完整推导见 §15b.1），此处列出供参考：
-
-```text
-Sigma : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0
-Sigma.mk : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B
-```
-
-含义：给定 `A : Sort 0` 和 `B : Π (x : A), Sort 0`，得到 `Sigma A B : Sort 0`。给定 `a : A` 和 `b : B a`，得到 `Sigma.mk A B a b : Sigma A B`。
-
-**评论：** 完整 Lean 版本的 `Sigma` 是 universe-polymorphic 且有 implicit arguments。当前模型没有这些机制，所以用单宇宙显式版本。
-
-### 5a.4 缩写：SΣ 与 SΣΠ
-
-定义方便缩写：
-
-```text
-SΣ  = exec(S₀, StructureCmd Sigma Sigma.mk
-  params = [A : SSort 0, B : SForall(x, SVar A, SSort 0)]
-  fields = [a : SVar A, b : SApp(SVar B, SVar a)])      （完整推导见 §15b.1）
-
-SΣΠ = exec(SΣ, StructureCmd Prod Prod.mk
-  params = [A : SSort 0, B : SSort 0]
-  fields = [a : SVar A, b : SVar B])                     （完整推导见 §15b.2）
-```
-
-SΣ 的内容（供参考）：
-
-```text
-SΣ.Axioms = {
-  Sigma :
-    Π (A : Sort (level 0)),
-    Π (B : Π (x : Var A), Sort (level 0)),
-    Sort (level 0),
-
-  Sigma.mk :
-    Π (A : Sort (level 0)),
-    Π (B : Π (x : Var A), Sort (level 0)),
-    Π (a : Var A),
-    Π (b : (Var B) (Var a)),
-    (Const Sigma) (Var A) (Var B)
-}
-
-SΣ.Defs = {}
-
-SΣ.Structures = {
-  Sigma : StructureInfo(Sigma, Sigma.mk, [
-    ParamInfo(A, Sort(level 0)),
-    ParamInfo(B, Π (x : Var A), Sort(level 0))
-  ], [
-    FieldInfo(a, Var A),
-    FieldInfo(b, App(Var B, Var a))
-  ])
-}
-```
-
-**评论：** `Sigma` 不是模型宇宙里自动存在的魔法对象。v9 中 `Sigma` 的类型签名和 StructureInfo 由 `exec(StructureCmd Sigma Sigma.mk ...)` 自动生成 — 不再预置。这类似于 Lean 的 prelude，但 prelude 中的结构声明在 v9 中由 StructureCmd 显式执行，而非隐式硬编码。
-
----
 ## 5b. 类型生成辅助函数                                        【v9 新增】
 
 本节定义四个辅助函数，用于从 `StructureInfo` 生成 type constructor 和 constructor 的 CoreTerm 类型。它们只依赖 `CoreTerm`（§4）和 `StructureInfo`/`ParamInfo`/`FieldInfo`（§5）— 不调用 `elab`、`whnf`、`infer_type`。
@@ -1031,6 +947,90 @@ def exec(S: State, cmd: Command) -> State:
 ```
 
 `elab` 在 §15a 定义。这是一个不可避免的前向引用：`exec` 处理用户输入（SurfaceTerm），必须调用 `elab` 来转换；而 `elab` 又调用 `infer_type`/`check_type`（§14）来验证类型。概念上，`exec` → `elab` → `infer_type/check_type` → `whnf/defeq`。文档按照依赖关系的反向顺序排列：先定义底层（`whnf`、`defeq`、`infer_type`），再定义上层（`elab`、`exec`）。
+
+---
+## 5a. 初始状态与结构缩写                                      【v9 修改】
+
+### 5a.1 初始状态 S₀
+
+v9 不再预置任何结构。初始状态为空：
+
+```text
+S₀.Axioms = {}
+S₀.Defs = {}
+S₀.Structures = {}
+```
+
+所有结构（包括 Sigma 和 Prod）都通过 StructureCmd 定义（见 §15b）。
+
+为后续引用方便，取全局名字：
+
+```text
+Sigma, Sigma.mk, Prod, Prod.mk : GlobalName
+```
+
+这些名字在 StructureCmd 中由用户提供（见 §6）。并要求所有名字互不相同。
+
+当前模型暂时**不引入** `Sigma.fst / Sigma.snd / Prod.fst / Prod.snd`。因为 `Proj(Sigma, 0, p)` 和 `Proj(Sigma, 1, p)` 已经表达了投影。
+
+### 5a.2 `Sigma` 与 `Sigma.mk` 的类型
+
+为避免 universe polymorphism，当前模型使用单宇宙版本。以下类型由 StructureCmd Sigma 自动生成（完整推导见 §15b.1），此处列出供参考：
+
+```text
+Sigma : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0
+Sigma.mk : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B
+```
+
+含义：给定 `A : Sort 0` 和 `B : Π (x : A), Sort 0`，得到 `Sigma A B : Sort 0`。给定 `a : A` 和 `b : B a`，得到 `Sigma.mk A B a b : Sigma A B`。
+
+**评论：** 完整 Lean 版本的 `Sigma` 是 universe-polymorphic 且有 implicit arguments。当前模型没有这些机制，所以用单宇宙显式版本。
+
+### 5a.4 缩写：SΣ 与 SΣΠ
+
+定义方便缩写：
+
+```text
+SΣ  = exec(S₀, StructureCmd Sigma Sigma.mk
+  params = [A : SSort 0, B : SForall(x, SVar A, SSort 0)]
+  fields = [a : SVar A, b : SApp(SVar B, SVar a)])      （完整推导见 §15b.1）
+
+SΣΠ = exec(SΣ, StructureCmd Prod Prod.mk
+  params = [A : SSort 0, B : SSort 0]
+  fields = [a : SVar A, b : SVar B])                     （完整推导见 §15b.2）
+```
+
+SΣ 的内容（供参考）：
+
+```text
+SΣ.Axioms = {
+  Sigma :
+    Π (A : Sort (level 0)),
+    Π (B : Π (x : Var A), Sort (level 0)),
+    Sort (level 0),
+
+  Sigma.mk :
+    Π (A : Sort (level 0)),
+    Π (B : Π (x : Var A), Sort (level 0)),
+    Π (a : Var A),
+    Π (b : (Var B) (Var a)),
+    (Const Sigma) (Var A) (Var B)
+}
+
+SΣ.Defs = {}
+
+SΣ.Structures = {
+  Sigma : StructureInfo(Sigma, Sigma.mk, [
+    ParamInfo(A, Sort(level 0)),
+    ParamInfo(B, Π (x : Var A), Sort(level 0))
+  ], [
+    FieldInfo(a, Var A),
+    FieldInfo(b, App(Var B, Var a))
+  ])
+}
+```
+
+**评论：** `Sigma` 不是模型宇宙里自动存在的魔法对象。v9 中 `Sigma` 的类型签名和 StructureInfo 由 `exec(StructureCmd Sigma Sigma.mk ...)` 自动生成 — 不再预置。这类似于 Lean 的 prelude，但 prelude 中的结构声明在 v9 中由 StructureCmd 显式执行，而非隐式硬编码。
 
 ---
 ## 8. `Context`
