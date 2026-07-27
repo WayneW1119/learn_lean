@@ -811,12 +811,12 @@ constructor ∉ dom(S.Structures)
 ```text
 Γ0 = ∅
 
-对于每个 ParamDecl(p_i, T_i_surf):
+对于 param_decls 中的每个 ParamDecl(p_i : LocalName, T_i_surf : SurfaceTerm):
   T_i_core = elab(S, Γ_i, T_i_surf, None)
   whnf(S, infer_type(S, Γ_i, T_i_core)) 必须是 Sort u_i
   Γ_{i+1} = Γ_i, p_i : T_i_core
 
-对于每个 FieldDecl(f_j, F_j_surf):
+对于 field_decls 中的每个 FieldDecl(f_j : LocalName, F_j_surf : SurfaceTerm):
   F_j_core = elab(S, Γ_{n+j}, F_j_surf, None)
   whnf(S, infer_type(S, Γ_{n+j}, F_j_core)) 必须是 Sort v_j
   Γ_{n+j+1} = Γ_{n+j}, f_j : F_j_core
@@ -830,8 +830,8 @@ constructor ∉ dom(S.Structures)
 info = StructureInfo(
   typeName    = typeName,
   constructor = constructor,
-  params      = [ParamInfo(p_i.name, T_i_core) for each param],
-  fields      = [FieldInfo(f_j.name, F_j_core) for each field]
+  params      = [ParamInfo(p_i, T_i_core) for each param],
+  fields      = [FieldInfo(f_j, F_j_core) for each field]
 )
 
 type_type = make_structure_type(info)
@@ -1065,183 +1065,6 @@ SΣ.Structures = {
 ```
 
 **评论：** `Sigma` 不是模型宇宙里自动存在的魔法对象。v9 中 `Sigma` 的类型签名和 StructureInfo 由 `exec(StructureCmd Sigma Sigma.mk ...)` 自动生成 — 不再预置。这类似于 Lean 的 prelude，但 prelude 中的结构声明在 v9 中由 StructureCmd 显式执行，而非隐式硬编码。
-
----
-## 9. `HasType` 的具体定义
-
-`HasType` 是 `State × Context × CoreTerm × CoreTerm` 的最小子集，满足以下规则。
-
-核心设计：**Sigma 类型的 formation、pair 的 introduction、fst/snd 的 elimination 不再需要专门的 HasType 规则。** 它们由基础的 `Const` 和 `App` 规则覆盖 — 因为 Sigma 现在是 `Const Sigma`，pair 是 `(Const Sigma.mk) A B a b`，它们的类型通过普通函数应用规则计算。
-
-唯一新增的规则是 `Proj` 的 elimination rule。
-
-### 9.1 基本 typing 规则
-
-- **Var 规则**
-
-  若：
-
-  ```text
-  Γ.Types.get(x) = A
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Var x : A
-  ```
-
-- **Const-axiom 规则**
-
-  若：
-
-  ```text
-  S.Axioms.get(n) = A
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Const n : A
-  ```
-
-- **Const-def 规则**
-
-  若：
-
-  ```text
-  S.Defs.get(n) = Pair(A, t)
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Const n : A
-  ```
-
-### 9.2 `Sort / Π / fun / App` 规则
-
-- **Sort 规则**
-
-  若：
-
-  ```text
-  v = succ_level(u)
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Sort u : Sort v
-  ```
-
-- **Forall 规则**
-
-  若：
-
-  ```text
-  S ; Γ ⊢ A : Sort u
-  S ; (Γ, x : A) ⊢ B : Sort v
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Forall(x, A, B) : Sort (max_level(u, v))
-  ```
-
-- **Lam 规则**
-
-  若：
-
-  ```text
-  S ; Γ ⊢ A : Sort u
-  S ; (Γ, x : A) ⊢ t : B
-  S ; (Γ, x : A) ⊢ B : Sort v
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Lam(x, A, t) : Forall(x, A, B)
-  ```
-
-- **App 规则**
-
-  若：
-
-  ```text
-  S ; Γ ⊢ f : Forall(x, A, B)
-  S ; Γ ⊢ a : A
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ App(f, a) : B[x := a]
-  ```
-
-### 9.3 `Proj` 规则
-
-- **Proj 规则**（一般投影 elimination rule）
-
-  若：
-
-  ```text
-  S ; Γ ⊢ p : T
-  info = S.Structures.get(structName)
-  info ≠ None
-  params = match_structure_type(S, structName, T)
-  params ≠ None
-  index < len(info.fields)
-  A = projection_type(S, Γ, info, index, p, params)
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Proj(structName, index, p) : A
-  ```
-
-  **Sigma 的特例：** 当 `structName = Sigma`、`T = App(App(Const Sigma, A_val), Bfun_val)` 时：
-  - `params = [A_val, Bfun_val]`
-  - `Proj(Sigma, 0, p) : A_val`（第一字段类型 `Var A` 替换 `A → A_val`，得到 `A_val`）
-  - `Proj(Sigma, 1, p) : App(Bfun_val, Proj(Sigma, 0, p))`（第二字段类型 `App(Var B, Var a)` 替换 `B → Bfun_val`、`a → Proj(Sigma, 0, p)`，得到 `App(Bfun_val, Proj(Sigma, 0, p))`）
-
-  **Prod 的特例：** 当 `structName = Prod`、`T = App(App(Const Prod, A_val), B_val)` 时：
-  - `params = [A_val, B_val]`
-  - `Proj(Prod, 0, p) : A_val`
-  - `Proj(Prod, 1, p) : B_val`（非依值 — 第二字段类型 `Var B` 替换 `B → B_val`，不依赖第一投影）
-
-**评论：**
-
-- HasType 规则与 `infer_type` 实现一致 — 都使用 `match_structure_type` + `projection_type`，不硬编码任何特定结构。
-- 一般规则的三个前提条件：(1) `S.Structures` 中注册了该结构；(2) target 的类型能匹配该结构的参数；(3) index 在合法范围内。这三条对应 `infer_type` 中 `Proj` 分支的三个检查。
-- v6 中的 `CSigma` formation rule、`CPairTyped` introduction rule、`CFst/CSnd` elimination rule 已全部消失 — 被更基础的 `Const/App/Proj` 规则取代。
-
-### 9.4 `Ann` 规则
-
-`Ann` 不再是 CoreTerm 的构造子（从 v6 开始）。类型标注在表层由 `SAnn` 处理，elaboration 时被消耗。详见 §15a.6。
-
-### 9.5 `Conversion` 规则
-
-- **Conversion 规则**（类型转换）
-
-  注意：`defeq` 在 §13 定义。此处是前向引用 — HasType 规则的形式化表述需要 `defeq`，但 `defeq` 的定义在后面。这是不可避免的：`defeq` 依赖 `whnf`（§12），而 HasType 规则需要在 `whnf` 之前给出（因为 §9 是 typing 规则的基础）。
-
-  若：
-
-  ```text
-  S ; Γ ⊢ t : A
-  S ; Γ ⊢ B : Sort u
-  defeq(S, Γ, A, B) = True
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ t : B
-  ```
 
 ---
 ## 10. `FV`
@@ -1803,6 +1626,183 @@ def projection_type(S : State, Γ : Context, info : StructureInfo, index : Nat, 
 **评论：** 字段类型是模板，使用 `Var` 引用参数名和前序字段名。`projection_type` 把每个参数名替换为实际的参数值，把每个前序字段名替换为对应的投影。结果是一个合法的 CoreTerm，不再包含 schema 变量。
 
 **评论（替换顺序）：** 替换列表先放参数名（如 A → A_val, B → Bfun_val），再放前序字段名（如 a → Proj(Sigma, 0, target)）。这个顺序不影响结果（因为 schema 变量互不依赖），但逻辑上更清晰 — 先处理"来自类型的参数"，再处理"来自前序字段的投影"。
+
+---
+## 9. `HasType` 的具体定义
+
+`HasType` 是 `State × Context × CoreTerm × CoreTerm` 的最小子集，满足以下规则。
+
+核心设计：**Sigma 类型的 formation、pair 的 introduction、fst/snd 的 elimination 不再需要专门的 HasType 规则。** 它们由基础的 `Const` 和 `App` 规则覆盖 — 因为 Sigma 现在是 `Const Sigma`，pair 是 `(Const Sigma.mk) A B a b`，它们的类型通过普通函数应用规则计算。
+
+唯一新增的规则是 `Proj` 的 elimination rule。
+
+### 9.1 基本 typing 规则
+
+- **Var 规则**
+
+  若：
+
+  ```text
+  Γ.Types.get(x) = A
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Var x : A
+  ```
+
+- **Const-axiom 规则**
+
+  若：
+
+  ```text
+  S.Axioms.get(n) = A
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Const n : A
+  ```
+
+- **Const-def 规则**
+
+  若：
+
+  ```text
+  S.Defs.get(n) = Pair(A, t)
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Const n : A
+  ```
+
+### 9.2 `Sort / Π / fun / App` 规则
+
+- **Sort 规则**
+
+  若：
+
+  ```text
+  v = succ_level(u)
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Sort u : Sort v
+  ```
+
+- **Forall 规则**
+
+  若：
+
+  ```text
+  S ; Γ ⊢ A : Sort u
+  S ; (Γ, x : A) ⊢ B : Sort v
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Forall(x, A, B) : Sort (max_level(u, v))
+  ```
+
+- **Lam 规则**
+
+  若：
+
+  ```text
+  S ; Γ ⊢ A : Sort u
+  S ; (Γ, x : A) ⊢ t : B
+  S ; (Γ, x : A) ⊢ B : Sort v
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Lam(x, A, t) : Forall(x, A, B)
+  ```
+
+- **App 规则**
+
+  若：
+
+  ```text
+  S ; Γ ⊢ f : Forall(x, A, B)
+  S ; Γ ⊢ a : A
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ App(f, a) : B[x := a]
+  ```
+
+### 9.3 `Proj` 规则
+
+- **Proj 规则**（一般投影 elimination rule）
+
+  若：
+
+  ```text
+  S ; Γ ⊢ p : T
+  info = S.Structures.get(structName)
+  info ≠ None
+  params = match_structure_type(S, structName, T)
+  params ≠ None
+  index < len(info.fields)
+  A = projection_type(S, Γ, info, index, p, params)
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Proj(structName, index, p) : A
+  ```
+
+  **Sigma 的特例：** 当 `structName = Sigma`、`T = App(App(Const Sigma, A_val), Bfun_val)` 时：
+  - `params = [A_val, Bfun_val]`
+  - `Proj(Sigma, 0, p) : A_val`（第一字段类型 `Var A` 替换 `A → A_val`，得到 `A_val`）
+  - `Proj(Sigma, 1, p) : App(Bfun_val, Proj(Sigma, 0, p))`（第二字段类型 `App(Var B, Var a)` 替换 `B → Bfun_val`、`a → Proj(Sigma, 0, p)`，得到 `App(Bfun_val, Proj(Sigma, 0, p))`）
+
+  **Prod 的特例：** 当 `structName = Prod`、`T = App(App(Const Prod, A_val), B_val)` 时：
+  - `params = [A_val, B_val]`
+  - `Proj(Prod, 0, p) : A_val`
+  - `Proj(Prod, 1, p) : B_val`（非依值 — 第二字段类型 `Var B` 替换 `B → B_val`，不依赖第一投影）
+
+**评论：**
+
+- HasType 规则与 `infer_type` 实现一致 — 都使用 `match_structure_type` + `projection_type`，不硬编码任何特定结构。
+- 一般规则的三个前提条件：(1) `S.Structures` 中注册了该结构；(2) target 的类型能匹配该结构的参数；(3) index 在合法范围内。这三条对应 `infer_type` 中 `Proj` 分支的三个检查。
+- v6 中的 `CSigma` formation rule、`CPairTyped` introduction rule、`CFst/CSnd` elimination rule 已全部消失 — 被更基础的 `Const/App/Proj` 规则取代。
+
+### 9.4 `Ann` 规则
+
+`Ann` 不再是 CoreTerm 的构造子（从 v6 开始）。类型标注在表层由 `SAnn` 处理，elaboration 时被消耗。详见 §15a.6。
+
+### 9.5 `Conversion` 规则
+
+- **Conversion 规则**（类型转换）
+
+  注意：`defeq` 在 §13 定义。此处是前向引用 — HasType 规则的形式化表述需要 `defeq`，但 `defeq` 的定义在后面。其他 HasType 规则的依赖（`whnf`、`match_structure_type`、`projection_type`）在 §12-§12a 已定义，不再构成前向引用。
+
+  若：
+
+  ```text
+  S ; Γ ⊢ t : A
+  S ; Γ ⊢ B : Sort u
+  defeq(S, Γ, A, B) = True
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ t : B
+  ```
 
 ---
 ## 13. 类型等价：`defeq`
