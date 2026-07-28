@@ -276,7 +276,7 @@ Name([A, B]).C         = Name([A, B, C])
 
 这里的名字拼接是元语言中的名字构造，不是 CoreTerm 中的函数应用，也不是字符串层面的普通 term 运算。
 
-当前模型直接使用 `n.x` 这一记号，不再另行定义 `n.x` 函数。
+当前模型直接以 `n.x` 作为元语言中的名字拼接记号，不再另外定义 `qualified_name` 一类功能重复的函数。
 
 ### 2.2 `GlobalName` 与 `LocalName`
 
@@ -295,16 +295,15 @@ Nat, zero, Sigma, Sigma.mk, Sigma.a, Point, Point.mk, Point.x
     : GlobalName
 ```
 
-这里说某个对象是 `GlobalName`，只表示它具有可以作为全局名字使用的结构；并不表示该名字已经存在于当前状态 `S` 中。一个全局名字是否已经声明，仍然通过查询：
+这里说某个对象是 `GlobalName`，只表示它具有可以作为全局名字使用的结构；并不表示该名字已经存在于当前状态 `S` 中。一个全局名字是否已经声明或被占用，通过查询：
 
 ```text
 S.Axioms
 S.Defs
-S.Structures
 S.Projections
 ```
 
-判断。
+判断。`S.Structures`、`S.Inductives` 和 `S.Recursors` 是附加在已有 Axiom 声明上的元数据：它们的 key 已经同时存在于 `S.Axioms`，因此不需要重复查询。`S.Projections` 不同：投影名会占用独立的全局名字，但不是可以写成 `Const` 的 term-level 声明，所以必须单独查询。
 
 定义：
 
@@ -698,9 +697,12 @@ class RecursorInfo:
 1. `T = info.typeName`；
 2. `S.Axioms.get(T) = Sort(level 0)`；
 3. `info.constructors` 中的名字互不相同；
-4. 对每个 `ctorName ∈ info.constructors`，有 `S.Axioms.get(ctorName) = Const(T)`；
-5. `S.Axioms.get(info.recursor) = make_recursor_type(info)`；
-6. `S.Recursors.get(info.recursor) = RecursorInfo(info.recursor, T, info.constructors)`。
+4. `info.recursor = append_local(info.typeName, rec)`；
+5. 对每个 `ctorName ∈ info.constructors`，存在 `c : LocalName`，使得 `ctorName = append_local(info.typeName, c)`；
+6. `info.recursor ∉ info.constructors`；
+7. 对每个 `ctorName ∈ info.constructors`，有 `S.Axioms.get(ctorName) = Const(T)`；
+8. `S.Axioms.get(info.recursor) = make_recursor_type(info)`；
+9. `S.Recursors.get(info.recursor) = RecursorInfo(info.recursor, T, info.constructors)`。
 
 反过来，对每个 `S.Recursors.get(r) = recInfo`，要求：
 
@@ -709,7 +711,7 @@ class RecursorInfo:
 3. `info.recursor = r`；
 4. `info.constructors = recInfo.constructors`。
 
-这些元数据与 `Structures`、`Projections` 一样，不占用独立的新声明名：inductive 类型名、构造子名和 recursor 名都已经同时存在于 `Axioms`。`Inductives` 和 `Recursors` 只是 kernel 计算所需的附加信息。
+`Inductives` 和 `Recursors` 与 `Structures` 一样，是已有 Axiom 声明的附加元数据：inductive 类型名、构造子名和 recursor 名都已经同时存在于 `Axioms`。`Projections` 不同：其条目会占用独立的全局名字，但该名字不是 term-level 常量。
 
 ### 5.2 `StructureInfo`
 
@@ -749,7 +751,7 @@ StructureInfo(
 
 **评论：** v10 引入 `ProjectionInfo`（§5.1b），记录每个字段的投影全局名字。`Proj(structName, index, target)` 仍然编码了投影的全部信息；`ProjectionInfo` 额外提供了从投影名到结构名和字段下标的映射，使得 `SProj` 和 `SDot` 的 elaboration 成为可能。
 
-### 5.2a `StructureInfo` well-formedness invariant
+### 5.2a `StructureInfo` 自身的 well-formedness invariant
 
 每个 `StructureInfo` 必须满足以下条件（这些条件由 `exec(StructureCmd)` 在生成时自动保证，见 §9.4）：
 
@@ -758,8 +760,6 @@ StructureInfo(
 3. **参数名和字段名互不相同：** 任何 `ParamInfo.name` 不等于任何 `FieldInfo.name`。
 4. **ParamInfo.type 的自由 schema variables 只引用前序 params：** `FV(info.params[i].type) ⊆ { info.params[0].name, ..., info.params[i-1].name }`。注意：此处说的是**自由变量**（FV），不是所有 `Var`。被 `Forall` 或 `Lam` binder 绑定的 `Var`（如 `Π (x : Var A), Sort 0` 中的 `Var x`）不是 schema variable，不受此约束。
 5. **FieldInfo.type 的自由 schema variables 只引用 params 和前序 fields：** `FV(info.fields[j].type) ⊆ { param names } ∪ { info.fields[0].name, ..., info.fields[j-1].name }`。
-6. **构造子参数顺序：** `info.constructor` 的类型签名中的参数顺序必须是先 `params` 后 `fields`。
-7. **构造子返回类型：** `info.constructor` 的类型签名的返回类型必须是 `(Const info.typeName)` 应用到所有参数变量上，即 `make_type_app(info.typeName, [param.name for param in info.params])`。
 
 **例子（Sigma）：**
 
@@ -775,7 +775,20 @@ fields:
 
 注意 `b` 可以引用 `a`（因为 `a` 是前序字段），但 `a` 不能引用 `b`（因为 `b` 是后续字段）。这保证了 `projection_type` 的替换是完整的 — 所有 schema 变量都能被参数值和前序投影替换掉，不存在未解释的 schema variable。
 
-**评论：** 这些条件是每个 `StructureInfo` 自身的 well-formedness 条件，不依赖 `State`。v9 中所有 StructureInfo 都通过 `exec(StructureCmd)` 生成 — telescope 检查（§9.4）自动保证参数/字段类型都是 Sort（即 universe level 可计算），参数和字段的名字互不重复，字段类型模板中的 Var 引用只指向参数名或前序字段名。没有 StructureInfo 是预置的。条件 6 和 7 由 `make_constructor_type`（§6.4）自动保证。
+**评论：** 以上五项只检查 `StructureInfo` 自身保存的名字和类型模板，不查询 `State`。v9 中所有 StructureInfo 都通过 `exec(StructureCmd)` 生成 — telescope 检查（§9.4）自动保证参数/字段类型都是 Sort（即 universe level 可计算），参数和字段的名字互不重复，字段类型模板中的 Var 引用只指向参数名或前序字段名。没有 StructureInfo 是预置的。
+
+### 5.2b `StructureInfo` 的 State-level invariant
+
+构造子的实际类型签名存储在 `S.Axioms`，而不存储在 `StructureInfo` 中。因此，结构类型与构造子声明之间的一致性必须作为 State-level invariant 单独规定。
+
+对每个 `S.Structures.get(T) = info`，要求：
+
+1. `T = info.typeName`；
+2. `info.typeName ≠ info.constructor`；
+3. `S.Axioms.get(T) = make_structure_type(info)`；
+4. `S.Axioms.get(info.constructor) = make_constructor_type(info)`。
+
+第 4 项同时规定了构造子类型中的 binder 顺序必须先是 `params`、再是 `fields`，并且返回类型必须是 `(Const info.typeName)` 应用到所有参数变量。这里需要查询 `S.Axioms`，所以它不是 `StructureInfo` 自身的 well-formedness 条件。四项条件由 `exec(StructureCmd)` 的类型生成、验证和原子状态更新共同保证（§9.4）。
 
 ### 5.3 `State`
 
@@ -812,6 +825,16 @@ S.Recursors
 
 普通全局声明名使用 `Axioms` / `Defs`，投影名使用 `Projections`。本模型采用统一的名字占用策略：`Structures`、`Inductives` 和 `Recursors` 都是已有 axiom 声明的附加元数据；新声明名不得与已有的 axiom、def 或 projection 名冲突。
 
+正式地，任何合法状态都满足：
+
+```text
+dom(S.Axioms) ∩ dom(S.Defs)        = ∅
+dom(S.Axioms) ∩ dom(S.Projections) = ∅
+dom(S.Defs)   ∩ dom(S.Projections) = ∅
+```
+
+也就是说，`dom(S.Axioms)`、`dom(S.Defs)` 和 `dom(S.Projections)` 两两不相交。`Structures`、`Inductives` 和 `Recursors` 不构成第四、第五或第六个独立名字空间；它们与对应 Axiom 声明的关系分别由 §5.2b 和 §5.1f 的 State-level invariant 规定。`declaration_name_is_used`（§9）正是对这一统一名字占用策略的可执行判断。
+
 注意：`S.Structures.get(Sigma)` 不是天生存在的。它必须来自某个具体状态。v9 中 Sigma 的 StructureInfo 来自 `exec(StructureCmd Sigma ...)`（见 §17.1），不再预置。
 
 ---
@@ -844,9 +867,9 @@ Pair(Const Sigma.mk, [A, B, a, b])
 **评论：** 这个函数在 `whnf` 的 `Proj` 分支中用于识别构造子应用。因为 constructor application 在 CoreTerm 里就是嵌套 `App`，没有特殊构造子。
 
 ---
-本节定义四个辅助函数，用于从 `StructureInfo` 生成 type constructor 和 constructor 的 CoreTerm 类型。它们只依赖 `CoreTerm`（§4）和 `StructureInfo`/`ParamInfo`/`FieldInfo`（§5）— 不调用 `elab`、`whnf`、`infer_type`。
+除 §6.0 的应用链分解函数 `collect_app` 外，本节定义五个类型生成辅助函数：前四个支持 structure 的 type constructor 与 constructor 类型生成，第五个生成 nullary inductive 的 recursor 类型。它们只依赖 `CoreTerm`（§4）和 §5 中的元数据 — 不调用 `elab`、`whnf`、`infer_type`。
 
-`exec(StructureCmd)` 会调用这些函数（§9），把生成的类型写入 `S.Axioms`。
+`exec(StructureCmd)` 和 `exec(InductiveCmd)` 会调用相应函数（§9），把生成的类型写入 `S.Axioms`。
 
 ### 6.1 `make_forall_chain`
 
@@ -1249,6 +1272,20 @@ class ConstructorDecl:
 
 **评论：** ParamDecl 和 FieldDecl 是 StructureCmd 的组成部分。它们的 type 是 SurfaceTerm（用户写表层语法），与 kernel 层的 ParamInfo/FieldInfo（type 是 CoreTerm 模板）对应。exec 会把前者 elaborate 成后者。
 
+为了让例子更简洁，约定在 `InductiveCmd` 的 `constructors` 列表中：
+
+```text
+[false, true]
+```
+
+是以下正式写法的元语言缩写：
+
+```text
+[ConstructorDecl(false), ConstructorDecl(true)]
+```
+
+一般地，列表中的短名字 `c` 缩写 `ConstructorDecl(c)`；需要强调数据结构本身时，仍写完整形式。
+
 定义数据类型 `Command`：
 
 ```text
@@ -1518,6 +1555,7 @@ S' = State(
 
 - StructureCmd 是 State 生成器，不产生 CoreTerm。它修改 State（加两个 Axiom、一个 StructureInfo 和每个字段的 ProjectionInfo），之后所有已有的 kernel 规则自动生效。
 - Telescope 检查保证 §5.2a 的 well-formedness invariant：每个 param/field 类型在正确的上下文中 elaborated，确保类型正确、引用合法。
+- 第三步生成并验证 `make_structure_type(info)` 与 `make_constructor_type(info)`，第五步再将两者和 `StructureInfo` 原子写入 State，因此保证 §5.2b 的 State-level invariant。
 - 字段类型的 elaboration 在包含所有参数的上下文中进行。例如 `b : B a` 中，`B` 和 `a` 都可以在上下文中找到 — `B` 是参数名（在前面的 Γ 扩展中加入），`a` 是前序字段名（在更前面的 Γ 扩展中加入）。这正是 telescope 的含义：参数和字段组成一个逐步扩展的上下文链。
 - `make_structure_type` 和 `make_constructor_type` 在 §6 定义，只依赖 CoreTerm 和 StructureInfo。它们不调用 elab/whnf/infer_type。
 - 第三步新增对生成类型的验证：`type_type` 和 `constructor_type` 都必须通过 `infer_type` 检查（结果必须是 Sort）。`constructor_type` 的返回类型中引用 `Const typeName`，所以需要先临时将 `typeName` 加入状态，才能正确验证 `constructor_type`。这防止了 `make_constructor_type` 的潜在 bug 导致 ill-typed 的 constructor type 被写入 Axioms。
