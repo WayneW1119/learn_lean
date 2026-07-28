@@ -3,15 +3,18 @@
 > **相对于 v9 的变化：**
 >
 > * §3：新增 `SProj` 和 `SDot` 两个 SurfaceTerm 构造子（projection name syntax 和 dot notation）
-> * §5.1b（新增）：`ProjectionInfo` 数据类型 — 记录投影名、所属结构、字段下标
+> * §5（新增 §5.1b）：`ProjectionInfo` 数据类型 — 记录投影名、所属结构、字段下标
 > * §5.3：`State` 新增 `Projections` 字段
-> * §5a：S₀、SΣ、SΣΠ 状态现在包含 `Projections` 字段
-> * §7.4 / §7.5：`exec(StructureCmd)` 新增第五步 — 自动为每个字段生成 ProjectionInfo（投影名 = qualified_name(typeName, fieldName)）
-> * §15：前置状态 S 的构造和最终展示中包含 Projections
-> * §15b：StructureCmd 例子展示 ProjectionInfo 的生成
-> * §15a：`elab` 新增 `SProj` 和 `SDot` 分支
+> * §10：初始状态 S₀、SΣ、SΣΠ 现在包含 `Projections` 字段
+> * §9.4 / §9.5：`exec(StructureCmd)` 新增第四步（原第四步状态更新顺延为第五步）— 自动为每个字段生成 ProjectionInfo（投影名 = typeName.fieldName）
+> * §16：前置状态 S 的构造和最终展示中包含 Projections
+> * §17：StructureCmd 例子展示 ProjectionInfo 的生成
+> * §15：`elab` 新增 `SProj` 和 `SDot` 分支
 > * §21：新增 SProj 和 SDot 的 elab 例子
-> * §12a.1：为保证 `projection_type` 的 schema 替换正确，`subst_many` 改为基于 `subst_simul` 的 capture-avoiding simultaneous substitution
+> * §2：名字系统改为分层的 `Name`/`NamePart`；`LocalName` = 单段名；新增 `append_local`
+> * §5.1c：新增 `ProjectionInfo` 的 State-level invariant
+> * §9：新增统一的声明名占用检查 `declaration_name_is_used`
+> * §11.5 / §13.2：新增 capture-avoiding simultaneous substitution `subst_simul`，`subst_many` 改为调用它
 > * v10 不改 `CoreTerm`（7 个构造子不变），不改 kernel typing/whnf/defeq 主规则
 >
 > **记号约定：** 本文档中有时使用"令 X = ..."或"简记 X 为 ..."。这是**文本层面的临时缩写**，不是模型中的操作。模型中没有"令"或"赋值"的概念 — State 的修改只能通过 `exec` 执行命令来完成。
@@ -21,6 +24,14 @@
 > - `CoreTerm` 的构造子**不再使用** `C` 前缀（`Const`、`App`、`Proj` 等）
 >
 > 在不引起歧义时，"写作"格式省略前缀 — 例如 `Const Nat` 既可以表示 `SConst Nat` 也可以表示 CoreTerm 的 `Const Nat`，具体含义由上下文决定。
+>
+> **Projection 写法约定：** v10 新增两种 SurfaceTerm：
+> - `SProj(projectionName, target)` — 写作 `projectionName target`
+> - `SDot(target, fieldName)` — 写作 `target.fieldName`
+>
+> 两者 elaboration 后都变成 `Proj(structName, index, target)`，其中 `structName` 和 `index` 通过 `ProjectionInfo` 查找得到。区别仅在于表层语法：`SProj` 直接使用完整投影名，`SDot` 从 target 的类型推断结构名，再与字段名拼接成完整投影名。
+>
+> 名字拼接：投影的全局名字通过 Name 拼接得到，例如 `Sigma.a = Name([Sigma]).a = Name([Sigma, a])`。这个名字在 elab 和 exec 中使用。
 >
 > **多参数应用缩写：** 因为 `App` 是二元构造子，下面约定：
 >
@@ -35,17 +46,6 @@
 > ```
 >
 > 例如 `(Const Sigma) A B` 表示 `App(App(Const Sigma, A), B)`。
->
-> **Projection 写法约定：** v10 新增两种 SurfaceTerm：
->
-> ```text
-> SProj(projectionName, target)    # 写作 projectionName target，如 Point.x p
-> SDot(target, fieldName)          # 写作 target.fieldName，如 p.x
-> ```
->
-> 两者 elaborate 后都变成 CoreTerm 的 `Proj(structName, index, target_core)`。
-> 投影名（如 `Point.x`、`Sigma.a`）属于 surface/elab 层；
-> 字段编号（如 `Proj(Point, 0, ...)`）属于 core/kernel 层。
 >
 > ---
 >
@@ -84,15 +84,13 @@ def exec(S: State, cmd: Command) -> State:
     ...
 ```
 - 对于各种类型、构造子应用、函数，都尽量给出"写作"的格式。
-- `CoreTerm` 有 7 个构造子：`Const`、`Sort`、`Var`、`App`、`Lam`、`Forall`、`Proj`。
+- `CoreTerm` 有 7 个构造子：`Const`、`Sort`、`Var`、`App`、`Lam`、`Forall`、`Proj`（v10 不变）。
   - `Sigma` 不再是 core 构造子 — 它是环境中的全局名字 `Const Sigma`。
   - `Pair` 不再是 core 构造子 — 它是 `Const Sigma.mk` 的应用。
   - `fst/snd` 不再是 core 构造子 — 它们是 `Proj(Sigma, 0/1, target)`。
   - 所有 kernel 函数（`infer_type`、`check_type`、`whnf`、`defeq`、`FV`、`subst`）只作用于 `CoreTerm`。
   - `elab` 函数负责把 `SurfaceTerm` 转换为 `CoreTerm`。
-- v10 新增 `ProjectionInfo`（§5.1b）和 `State.Projections`（§5.3）— StructureCmd 自动为每个字段生成投影名（如 `qualified_name(Sigma, a)` 简写为 `Sigma.a`）。投影名用于 elaboration（§15a），不注册到 Axioms（Method A）。Kernel 规则无需修改。v10 新增 `qualified_name`（§2.4）用于形式化名字拼接。
-- v10 新增 `SProj` 和 `SDot`（§3）— 用户可以写 `Point.x p`（qualified projection）和 `p.x`（dot notation）。两者 elaborate 后变成 `Proj(structName, index, target_core)`。
-- `StructureCmd`（§6）让用户通过顶层命令声明新结构（包括 Sigma 和 Prod）。当前模型不预置任何结构 — 所有 StructureInfo 都通过 StructureCmd 生成。Kernel 规则无需修改即可处理新声明的结构。
+- v9 新增 `StructureCmd`（§7），用户可以通过顶层命令声明新结构（包括 Sigma 和 Prod）。v9 不再预置任何结构 — 所有 StructureInfo 都通过 StructureCmd 生成。Kernel 规则无需修改即可处理新声明的结构。
 ---
 ## 1. 关于 `PartialMap`
 对 `M : PartialMap[K, V]`，约定可以使用以下操作：
@@ -100,9 +98,7 @@ def exec(S: State, cmd: Command) -> State:
 M.contains(k)
 M.get(k)
 M.set(k, v)
-M.remove(k)
-dom(M)
-PartialMap.empty()
+merge(M1, M2)
 ```
 也允许使用下列等价记号：
 ```text
@@ -110,17 +106,213 @@ k in dom(M)
 M(k)
 M[k -> v]
 ```
+
+其中 `merge(M1, M2)` 返回包含两张偏映射全部条目的新映射；若 key 重复，则取 `M2` 中的值。模型只在已经检查 key 不冲突后调用它。
 ---
 ## 2. 名字与 level
-### 2.1 `GlobalName`
-现在有一个集合 `GlobalName`，里面是所有可能的名字。
-可以把它理解为一个可数集合，本质上等价于一个自然数序列。
-### 2.2 `LocalName`
-现在有一个集合：
+### 2.1 `Name`
+
+首先把一个名字分成若干个组成部分。
+
+```text
+NamePart = NamePart(text : String)
+```
+
+其中，`text` 是非空字符串，并且不包含字符 `"."`。
+
+例如：
+
+```text
+Nat, Sigma, mk, Point, x, y : NamePart
+```
+
+定义：
+
+```text
+class Name:
+    parts : List[NamePart]
+```
+
+并要求：
+
+```text
+len(parts) ≥ 1
+```
+
+即一个 `Name` 是由一个或多个 `NamePart` 构成的非空有限序列。
+
+显示一个 `Name` 时，在相邻的 `NamePart` 之间加入 `"."`。例如：
+
+```text
+Name([Nat])              # 写作 Nat
+Name([Sigma])            # 写作 Sigma
+Name([Sigma, mk])        # 写作 Sigma.mk
+Name([Point, x])         # 写作 Point.x
+Name([A, B, C])          # 写作 A.B.C
+```
+
+两个 `Name` 相等，当且仅当其 `parts` 列表长度相同，并且每个位置上的 `NamePart` 都相等。因此：
+
+```text
+Sigma.mk ≠ Sigma
+Sigma.mk ≠ Sigma.a
+A.B.C   ≠ A.B
+```
+
+名字中的 `"."` 只是各组成部分之间的显示分隔符，不属于任何一个 `NamePart`。
+
+**名字拼接记号**
+
+若：
+
+```text
+n : Name
+x : NamePart
+```
+
+则规定：
+
+```text
+n.x
+```
+
+表示在 `n.parts` 的末尾追加 `x` 所得到的新名字：
+
+```text
+(n.x).parts = n.parts ++ [x]
+```
+
+例如：
+
+```text
+Sigma.mk
+Point.x
+Point.y
+A.B.C
+```
+
+分别表示：
+
+```text
+Name([Sigma]).mk       = Name([Sigma, mk])
+Name([Point]).x        = Name([Point, x])
+Name([Point]).y        = Name([Point, y])
+Name([A, B]).C         = Name([A, B, C])
+```
+
+这里的名字拼接是元语言中的名字构造，不是 CoreTerm 中的函数应用，也不是字符串层面的普通 term 运算。
+
+当前模型直接使用 `n.x` 这一记号，不再另行定义 `n.x` 函数。
+
+### 2.2 `GlobalName` 与 `LocalName`
+
+定义：
+
+```text
+GlobalName = Name
+```
+
+即任何合法的 `Name` 都可以作为全局名字。
+
+例如：
+
+```text
+Nat, zero, Sigma, Sigma.mk, Sigma.a, Point, Point.mk, Point.x
+    : GlobalName
+```
+
+这里说某个对象是 `GlobalName`，只表示它具有可以作为全局名字使用的结构；并不表示该名字已经存在于当前状态 `S` 中。一个全局名字是否已经声明，仍然通过查询：
+
+```text
+S.Axioms
+S.Defs
+S.Structures
+S.Projections
+```
+
+判断。
+
+定义：
+
+```text
+LocalName = {n : Name | len(n.parts) = 1}
+```
+
+因此：
+
 ```text
 LocalName ⊆ GlobalName
 ```
-其中的元素表示可以作为局部变量名字使用的那些名字。
+
+`LocalName` 只包含由一个 `NamePart` 构成的名字。例如：
+
+```text
+x, y, A, B, a, b : LocalName
+```
+
+而：
+
+```text
+Sigma.mk, Point.x, A.B : GlobalName
+```
+
+但不是 `LocalName`。
+
+当前模型中，`LocalName` 用于：
+
+- 局部变量名字
+- binder 名字
+- Context 中的名字
+- structure 参数名
+- structure 字段名
+
+例如：
+
+```text
+Lam(x, A, body)
+Forall(x, A, B)
+ParamDecl(A, ...)
+FieldDecl(x, ...)
+```
+
+都要求其中的名字是 `LocalName`。
+
+单段名字也可以作为全局名字。例如：
+
+```text
+Nat : GlobalName
+x   : GlobalName
+```
+
+因此，"局部名字"和"全局名字"并不是两种互不相容的名字结构。一个单段名字 `x` 可以在某处作为局部变量名使用，也可以在另一处作为全局声明名使用；它的具体作用由其出现的位置和当前状态决定。
+
+当前 v10 尚未加入一般的名称解析机制。表层语法仍然通过：
+
+```text
+SConst(name : GlobalName)
+SVar(name : LocalName)
+```
+
+显式区分全局常量引用和局部变量引用。
+
+为了把单段局部名字追加到全局名字后面，定义：
+
+```python
+# 写作 append_local(parent, child)
+def append_local(parent : GlobalName, child : LocalName) -> GlobalName:
+    # child.parts 恰好只有一个元素
+    return Name(parent.parts ++ child.parts)
+```
+
+因此：
+
+```text
+append_local(Sigma, a) = Sigma.a
+append_local(Point, x) = Point.x
+```
+
+后文为了简洁，也把 `append_local(n, x)` 写作 `n.x`。这里要求右侧的 `x` 是 `LocalName`；因为它只有一个 `NamePart`，该记号与 §2.1 对 `NamePart` 的追加定义一致。
+
 ### 2.3 `Level`
 当前阶段，定义数据类型 `Level`：
 ```text
@@ -153,28 +345,10 @@ def max_level(l1 : Level, l2 : Level) -> Level:
         return level max(m, n)
     raise Error            # 之后再补充
 ```
-
-### 2.4 `qualified_name` — 名字拼接操作                           【v10 新增】
-
-定义一个底层原语用于从父名字和子名字构造完整全局名字：
-
-```python
-# 写作 qualified_name(parent, child)
-def qualified_name(parent : GlobalName, child : LocalName) -> GlobalName:
-    # 底层已实现：将 parent 和 child 编码为一个新的 GlobalName
-    # 此函数是 total 的 — 对所有 parent：GlobalName, child：LocalName 都有定义
-```
-
-**injectivity 公理：** `qualified_name(p₁, c₁) = qualified_name(p₂, c₂) ⟺ p₁ = p₂ ∧ c₁ = c₂`。
-
-此函数视为底层已实现（与 `fresh_local_name`、`Nat` 运算同级）。生成名可能与已有名字冲突——是否允许写入 State 由 `exec` 的名字检查（`name_is_used`）决定。
-
-**简写约定：** 在例子和注释中，`qualified_name(Sigma, a)` 简写为 `Sigma.a`，`qualified_name(Point, x)` 简写为 `Point.x`，等。
-
 ---
 ## 3. `SurfaceTerm`                                             【v10 修改】
 
-`SurfaceTerm` 表示用户在表层语法中写的东西。v10 新增 `SProj` 和 `SDot` — 让用户可以通过投影名或 dot notation 访问结构字段。
+`SurfaceTerm` 表示用户在表层语法中写的东西。用户仍然写 `Σ (x : A), B`、`⟨a, b⟩`、`fst p`、`snd p`、`(t : A)`。v10 新增 `projectionName target` 和 `target.fieldName` 两种投影语法。
 
 ```text
 SurfaceTerm = SConst(name : GlobalName)                  # 写作 Const name
@@ -187,12 +361,14 @@ SurfaceTerm = SConst(name : GlobalName)                  # 写作 Const name
             | SPair(a : SurfaceTerm, b : SurfaceTerm)    # 写作 ⟨a, b⟩
             | SFst(t : SurfaceTerm)                      # 写作 fst t
             | SSnd(t : SurfaceTerm)                      # 写作 snd t
-            | SProj(projectionName : GlobalName, target : SurfaceTerm)   # 写作 projectionName target  【v10 新增】
-            | SDot(target : SurfaceTerm, fieldName : LocalName)          # 写作 target.fieldName       【v10 新增】
             | SAnn(t : SurfaceTerm, A : SurfaceTerm)     # 写作 (t : A)
+            | SProj(projectionName : GlobalName, target : SurfaceTerm)
+                                                      # 写作 projectionName target          【v10 新增】
+            | SDot(target : SurfaceTerm, fieldName : LocalName)
+                                                      # 写作 target.fieldName                【v10 新增】
 ```
 
-**评论：** `SurfaceTerm` 保留了 `SSigma / SPair / SFst / SSnd / SAnn`。用户确实会写这些东西。从 v7 起，elaboration 后它们分别变成：
+**评论：** `SurfaceTerm` 保留了 `SSigma / SPair / SFst / SSnd / SAnn`。用户确实会写这些东西。但从 v7 起，elaboration 后它们分别变成：
 
 ```text
 SSigma(x, A, B) → (Const Sigma) A (fun (x : A) => B)
@@ -200,23 +376,11 @@ SPair(a, b)     → (Const Sigma.mk) A (fun (x : A) => B) a b    (需 expected t
 SFst(t)         → Proj(Sigma, 0, t_core)
 SSnd(t)         → Proj(Sigma, 1, t_core)
 SAnn(t, A)      → t_core                                        (Ann 被消耗)
+
+v10 新增（详见 §15.10-§15.11）：
+SProj(projectionName, t) → Proj(structName, index, t_core)   （用完整投影名查 ProjectionInfo）
+SDot(t, fieldName)       → Proj(structName, index, t_core)   （从 target 类型推断 structName）
 ```
-
-v10 新增 `SProj` 和 `SDot`：
-
-```text
-SProj(Sigma.a, p)  → Proj(Sigma, 0, p_core)    (查 S.Projections 得到 ProjectionInfo(Sigma.a, Sigma, 0))
-SProj(Sigma.b, p)  → Proj(Sigma, 1, p_core)    (查 S.Projections 得到 ProjectionInfo(Sigma.b, Sigma, 1))
-SProj(Point.x, p)  → Proj(Point, 0, p_core)    (查 S.Projections 得到 ProjectionInfo(Point.x, Point, 0))
-SDot(p, a)         → Proj(Sigma, 0, p_core)    (推断 p 的类型 → 查 Sigma 的 fields → a 是第 0 个字段)
-SDot(p, x)         → Proj(Point, 0, p_core)    (推断 p 的类型 → 查 Point 的 fields → x 是第 0 个字段)
-```
-
-`SProj` 用投影名直接指明结构，`SDot` 用字段名需要类型推断才能确定结构。两者 elaborate 后都变成 `Proj(structName, index, target_core)` — 投影名属于 surface/elab 层，字段编号属于 core/kernel 层。
-
-**注意（Method A）：** `SProj(projectionName, target)` 是独立的 SurfaceTerm 构造子，**不是** `SApp(SConst projectionName, target)`。因为 projectionName 只存在于 `State.Projections` 中（elaboration 元数据），不是 `State.Axioms` 中的普通常量——所以 `Const projectionName` 不是合法的 CoreTerm。`projectionName target` 由 parser/elaborator 直接解析为 `SProj(projectionName, target)`，不经过函数应用。
-
-**评论（SFst/SSnd 与 SProj/SDot 的关系）：** `SFst(t)` 和 `SSnd(t)` 是 Sigma 的专属 surface 语法 — 它们硬编码引用 `Const Sigma`。`SProj(projectionName, t)` 和 `SDot(t, fieldName)` 是 v10 的通用投影语法 — 适用于所有通过 StructureCmd 声明的结构。两者可以共存：`SProj(Sigma.a, p)` 和 `SFst(p)` 都 elaborate 成 `Proj(Sigma, 0, p_core)`。`SDot(p, a)` 也 elaborate 成同一个结果（前提是推断出 `p` 的类型是 Sigma 应用）。
 
 ---
 ## 4. `CoreTerm`
@@ -244,7 +408,8 @@ CoreTerm = Const(name : GlobalName)                          # 写作 Const name
 - **`Pair` 不再是 core 构造子。** 表层 `⟨a, b⟩` 在 elaboration 后变成 `(Const Sigma.mk) A Bfun a b` — 构造子的普通应用。
 - **`fst / snd` 不再是 core 构造子。** 它们变成 `Proj(Sigma, 0, target)` 和 `Proj(Sigma, 1, target)` — 一般的投影机制。
 - **`Proj` 是新的 core 构造子。** 它记录：投影哪个结构（`structName`）、投影第几个字段（`index`）、对哪个目标投影（`target`）。
-- v10 引入 `ProjectionInfo`（§5.1b）和 `State.Projections`（§5.3），记录投影名（如 `Sigma.a`、`Point.x`）与结构名、字段下标的映射。投影名用于 elaboration（`SProj` 和 `SDot`，§3），不注册到 Axioms（Method A）。CoreTerm 中仍然用 `Proj(structName, index, target)` 编码投影 — 投影名属于 surface/elab 层，字段编号属于 core/kernel 层。
+- 暂时**不引入** `Sigma.fst / Sigma.snd / Prod.fst / Prod.snd` 全局名字。因为 `Proj(structName, index, p)` 已经编码了投影的全部信息。
+- v10 引入 `ProjectionInfo`（见 §5.1b），记录每个字段的投影全局名字。`StructureInfo` 记录 `typeName`、`constructor`、`params`、`fields`。
 
 ### 4.1 例子
 
@@ -300,49 +465,167 @@ Proj(Point, 1, point)   // 第 1 个字段（y）
 
 因为 `CFst(t)` 和 `CSnd(t)` 只能处理 Sigma 这一种结构。如果将来模型里加入了 `Point`（两个字段 x、y）、`Color`（三个字段 r、g、b）、`Prod`（两个字段但第二字段不依赖第一字段），难道每个都加一套 `CPointX` / `CPointY` / `CColorR` / `CColorG` / ...？
 
-`Proj` 用一个构造子解决了所有结构的字段提取。这就是"一般化"的具体收益。v10 中所有结构（包括 Sigma）都通过 StructureCmd 定义，Proj 规则自动适用 — 不需要修改 kernel 代码。v10 新增 ProjectionInfo 和 SProj/SDot — 投影名属于 surface/elab 层，字段编号属于 core/kernel 层（见 §15b 和 §19.6 的 Point 例子）。
+`Proj` 用一个构造子解决了所有结构的字段提取。这就是"一般化"的具体收益。v9 中所有结构（包括 Sigma）都通过 StructureCmd 定义，Proj 规则自动适用 — 不需要修改 kernel 代码（见 §17 和 §19.6 的 Point 例子）。
 
 ---
-## 4a. 辅助函数（CoreTerm 层面）
+## 5. `State` 与 `StructureInfo`
 
-本节定义几个只依赖 CoreTerm 的辅助函数。结构投影相关的辅助函数（`subst_many`、`match_structure_type`、`projection_type`）依赖 `subst`（§11）、`whnf`（§12）、`State`（§5）等后定义的概念，因此放在 §12a（在 `whnf` 之后定义）。
+### 5.1 `ParamInfo` 与 `FieldInfo`
 
-### 4a.1 `is_sigma_type`
-
-```python
-# 写作 is_sigma_type(t)
-def is_sigma_type(t : CoreTerm) -> Optional[Pair[CoreTerm, CoreTerm]]:
-    '''
-    如果 t = App(App(Const Sigma, A), Bfun)，返回 Pair(A, Bfun)
-    否则返回 None
-    此函数只做模式匹配，不调用 whnf（调用者需要预先 whnf 输入）。
-    当前模型中此函数仍用于 elab 的 Sigma 专属分支。
-    一般化的类型识别应使用 match_structure_type（§12a.2）。
-    '''
-    if isinstance(t, App):
-        f_B, Bfun = t.args
-        if isinstance(f_B, App):
-            f_A, A = f_B.args
-            if isinstance(f_A, Const) and f_A.args == Sigma:
-                return Pair(A, Bfun)
-    return None
-```
-
-也就是说：
+新增两个 record 类型：
 
 ```text
-is_sigma_type((Const Sigma) A Bfun) = Pair(A, Bfun)
+class ParamInfo:
+    name : LocalName
+    type : CoreTerm          # 参数的类型（模板，可能引用前序参数名）
+
+class FieldInfo:
+    name : LocalName
+    type : CoreTerm          # 字段的类型（模板，可能引用参数名和前序字段名）
 ```
 
-其中 `Bfun` 通常是一个 lambda：
+**评论：** `ParamInfo.type` 和 `FieldInfo.type` 是**CoreTerm 形式的 schema template**。它们在语法上是合法的 CoreTerm，但可能含有**schema variables** — 即用 `Var` 引用参数名和前序字段名（如 `Var A`、`Var B`、`Var a`），这些名字属于 structure 的 schema 名字空间，不在任何真实的对象层 Γ 上下文中。因此，模板通常不是 closed CoreTerm，也不一定能在普通对象上下文中直接 type-check。`projection_type` 在返回前会替换掉所有 schema 变量，所以模板中的 `Var` 永远不会作为裸 term 进入 typing 判断。
+
+
+### 5.1b `ProjectionInfo`                                     【v10 新增】
 
 ```text
-Bfun = fun (x : A) => B_body
+class ProjectionInfo:
+    projName    : GlobalName     # 投影的全局名字，如 Sigma.a
+    structName  : GlobalName     # 所属结构名
+    fieldIndex  : Nat            # 字段下标（从 0 开始）
 ```
 
-**评论：** is_sigma_type is used only in elab's Sigma-specific branch (§15a); general type identification uses match_structure_type (§12a.2).
+每个 `ProjectionInfo` 记录：一个投影名字 `projName`（全局唯一）、它属于哪个结构 `structName`、对应结构中的第几个字段 `fieldIndex`。
 
-### 4a.2 `collect_app`
+**例子（Sigma）：**
+
+```text
+ProjectionInfo(Sigma.a, Sigma, 0)    # 投影名 Sigma.a，属于 Sigma，第 0 个字段（a）
+ProjectionInfo(Sigma.b, Sigma, 1)    # 投影名 Sigma.b，属于 Sigma，第 1 个字段（b）
+```
+
+**例子（Prod）：**
+
+```text
+ProjectionInfo(Prod.a, Prod, 0)      # 投影名 Prod.a，属于 Prod，第 0 个字段（a）
+ProjectionInfo(Prod.b, Prod, 1)      # 投影名 Prod.b，属于 Prod，第 1 个字段（b）
+```
+
+**评论：** `ProjectionInfo` 的引入使得 `SProj` 和 `SDot` 可以在 elaboration 时查找投影名对应的结构名和字段下标。`projName` 由 `typeName.fieldName` 生成，在 `exec(StructureCmd)` 时自动创建并写入 `S.Projections`。
+
+### 5.1c `ProjectionInfo` 的 State-level invariant             【v10 新增】
+
+对状态中的每个映射 `S.Projections.get(g) = pi`，要求：
+
+1. `g = pi.projName`；
+2. `S.Structures.get(pi.structName) = info`；
+3. `pi.fieldIndex < len(info.fields)`；
+4. `pi.projName = append_local(pi.structName, info.fields[pi.fieldIndex].name)`。
+
+这些条件说明 `ProjectionInfo` 不是独立声明：它必须准确指向某个已注册结构的一个真实字段。条件由 `exec(StructureCmd)` 在同一次原子状态更新中保证。
+
+### 5.2 `StructureInfo`
+
+```text
+class StructureInfo:
+    typeName    : GlobalName
+    constructor : GlobalName
+    params      : List[ParamInfo]     # 类型参数列表
+    fields      : List[FieldInfo]     # 字段列表
+```
+
+其中：
+- `typeName` 是结构类型的全局名字；
+- `constructor` 是该结构的构造子名字；
+- `params` 是类型参数列表，每个 `ParamInfo` 记录参数名和类型模板；
+- `fields` 是字段列表，每个 `FieldInfo` 记录字段名和类型模板；
+- `numParams = len(params)`、`numFields = len(fields)`。不再单独存储这两个字段，改用 `len()`。whnf 中的引用也相应更新。
+
+对于 `Sigma`（见 §10）：
+
+```text
+StructureInfo(
+  typeName    = Sigma,
+  constructor = Sigma.mk,
+  params = [
+    ParamInfo(A, Sort(level 0)),
+    ParamInfo(B, Π (x : Var A), Sort(level 0))
+  ],
+  fields = [
+    FieldInfo(a, Var A),
+    FieldInfo(b, App(Var B, Var a))
+  ]
+)
+```
+
+含义：`ParamInfo(A, Sort(level 0))` 表示 Sigma 有一个参数名为 A、类型为 Sort 0。`FieldInfo(a, Var A)` 表示 Sigma 的第一个字段名为 a、类型模板为 Var A（经替换后变成实际的 A 值）。`FieldInfo(b, App(Var B, Var a))` 表示第二个字段名为 b、类型模板为 B 应用到 a（依赖第一个字段）。
+
+**评论：** v10 引入 `ProjectionInfo`（§5.1b），记录每个字段的投影全局名字。`Proj(structName, index, target)` 仍然编码了投影的全部信息；`ProjectionInfo` 额外提供了从投影名到结构名和字段下标的映射，使得 `SProj` 和 `SDot` 的 elaboration 成为可能。
+
+### 5.2a `StructureInfo` well-formedness invariant
+
+每个 `StructureInfo` 必须满足以下条件（这些条件由 `exec(StructureCmd)` 在生成时自动保证，见 §9.4）：
+
+1. **参数名互不相同：** `info.params` 中所有 `ParamInfo.name` 互不相等。
+2. **字段名互不相同：** `info.fields` 中所有 `FieldInfo.name` 互不相等。
+3. **参数名和字段名互不相同：** 任何 `ParamInfo.name` 不等于任何 `FieldInfo.name`。
+4. **ParamInfo.type 的自由 schema variables 只引用前序 params：** `FV(info.params[i].type) ⊆ { info.params[0].name, ..., info.params[i-1].name }`。注意：此处说的是**自由变量**（FV），不是所有 `Var`。被 `Forall` 或 `Lam` binder 绑定的 `Var`（如 `Π (x : Var A), Sort 0` 中的 `Var x`）不是 schema variable，不受此约束。
+5. **FieldInfo.type 的自由 schema variables 只引用 params 和前序 fields：** `FV(info.fields[j].type) ⊆ { param names } ∪ { info.fields[0].name, ..., info.fields[j-1].name }`。
+6. **构造子参数顺序：** `info.constructor` 的类型签名中的参数顺序必须是先 `params` 后 `fields`。
+7. **构造子返回类型：** `info.constructor` 的类型签名的返回类型必须是 `(Const info.typeName)` 应用到所有参数变量上，即 `make_type_app(info.typeName, [param.name for param in info.params])`。
+
+**例子（Sigma）：**
+
+```text
+params:
+  A : Sort 0          # 只引用底层类型
+  B : Π (x : A), Sort 0   # B 引用了前序参数 A ✓
+
+fields:
+  a : A               # a 引用了参数 A ✓（不引用后续字段）
+  b : B a             # b 引用了参数 B 和前序字段 a ✓
+```
+
+注意 `b` 可以引用 `a`（因为 `a` 是前序字段），但 `a` 不能引用 `b`（因为 `b` 是后续字段）。这保证了 `projection_type` 的替换是完整的 — 所有 schema 变量都能被参数值和前序投影替换掉，不存在未解释的 schema variable。
+
+**评论：** 这些条件是每个 `StructureInfo` 自身的 well-formedness 条件，不依赖 `State`。v9 中所有 StructureInfo 都通过 `exec(StructureCmd)` 生成 — telescope 检查（§9.4）自动保证参数/字段类型都是 Sort（即 universe level 可计算），参数和字段的名字互不重复，字段类型模板中的 Var 引用只指向参数名或前序字段名。没有 StructureInfo 是预置的。条件 6 和 7 由 `make_constructor_type`（§6.4）自动保证。
+
+### 5.3 `State`                                                【v10 修改】
+
+```text
+class State:
+    Axioms      : PartialMap[g : GlobalName, t : CoreTerm]                 # 写作 g : t
+    Defs        : PartialMap[g : GlobalName, Pair[t1 : CoreTerm, t2 : CoreTerm]]  # 写作 g : (t1, t2)
+    Structures  : PartialMap[g : GlobalName, info : StructureInfo]          # 写作 g ↦ info
+    Projections : PartialMap[g : GlobalName, pi : ProjectionInfo]           # 写作 g ↦ pi       【v10 新增】
+```
+
+若 `S : State`，则：
+
+```text
+S.Axioms
+S.Defs
+S.Structures
+S.Projections
+```
+
+分别表示该状态中的四个字段。
+
+其中：
+- 若 `S.Axioms.get(n) = A`，则表示：全局名字 `n` 被声明为 axiom，类型是 `A`。
+- 若 `S.Defs.get(n) = Pair(A, t)`，则表示：全局名字 `n` 被声明为 def，类型是 `A`，body 是 `t`。
+- 若 `S.Structures.get(n) = info`，则表示：`n` 是一个已登记的结构类型，结构信息是 `info`。
+- 若 `S.Projections.get(g) = pi`，则表示：`g` 是一个已登记的投影名，投影信息是 `pi`。
+
+普通全局声明名使用 `Axioms` / `Defs`，投影名使用 `Projections`。本模型采用统一的名字占用策略：除 `Structures` 作为结构类型声明的附加元数据、会有意与 `Axioms` 共享 `typeName` 外，新声明名不得与已有的 axiom、def 或 projection 名冲突。
+
+注意：`S.Structures.get(Sigma)` 不是天生存在的。它必须来自某个具体状态。v9 中 Sigma 的 StructureInfo 来自 `exec(StructureCmd Sigma ...)`（见 §17.1），不再预置。
+
+---
+## 6. 类型生成辅助函数
+
+### 6.0 `collect_app`
 
 ```python
 # 写作 collect_app(t)
@@ -368,319 +651,12 @@ Pair(Const Sigma.mk, [A, B, a, b])
 
 **评论：** 这个函数在 `whnf` 的 `Proj` 分支中用于识别构造子应用。因为 constructor application 在 CoreTerm 里就是嵌套 `App`，没有特殊构造子。
 
-### 4a.3 元语言辅助函数
-
-为了写例子方便，定义两个**元语言**辅助函数（不是 CoreTerm 构造子）：
-
-```python
-# 写作 mk_sigma_type(A, Bfun)
-def mk_sigma_type(A : CoreTerm, Bfun : CoreTerm) -> CoreTerm:
-    return App(App(Const(Sigma), A), Bfun)
-
-# 写作 mk_sigma_mk(A, Bfun, a, b)
-def mk_sigma_mk(A : CoreTerm, Bfun : CoreTerm, a : CoreTerm, b : CoreTerm) -> CoreTerm:
-    return App(App(App(App(Const(Sigma.mk), A), Bfun), a), b)
-```
-
-即：
-
-```text
-mk_sigma_type(A, Bfun) = (Const Sigma) A Bfun
-mk_sigma_mk(A, Bfun, a, b) = (Const Sigma.mk) A Bfun a b
-```
-
-这些只是元语言函数，不是新的 CoreTerm 构造子。
-
 ---
-## 5. `State` 与 `StructureInfo`
-
-### 5.1 `ParamInfo` 与 `FieldInfo`
-
-新增两个 record 类型：
-
-```text
-class ParamInfo:
-    name : LocalName
-    type : CoreTerm          # 参数的类型（模板，可能引用前序参数名）
-
-class FieldInfo:
-    name : LocalName
-    type : CoreTerm          # 字段的类型（模板，可能引用参数名和前序字段名）
-```
-
-**评论：** `ParamInfo.type` 和 `FieldInfo.type` 是**CoreTerm 形式的 schema template**。它们在语法上是合法的 CoreTerm，但可能含有**schema variables**。
-
-**Schema template 约定：**
-
-1. `ParamInfo.type` 和 `FieldInfo.type` 是在 structure telescope 中生成的 CoreTerm template。
-2. 其中**自由出现**的 `Var name`，若 `name` 是参数名或前序字段名，则解释为 schema variable。
-3. Schema variables 只在 StructureInfo 内部存在——它们不会被对象层的 binder 绑定，也不属于任何对象层 Context（Γ）。
-4. 在 `projection_type` 返回结果前，所有 schema variables 必须通过 **capture-avoiding simultaneous substitution**（`subst_simul`、§12a.1）被替换掉。替换后结果不再包含 schema variables。但它不一定是 closed CoreTerm——它可以包含对象层自由变量（如 `Proj(Sigma, 0, Var p)` 中的 `Var p`），只要这些变量在当前 Context Γ 中有类型即可。
-5. **替换不得递归进入 replacement term**——否则可能把 replacement term 内部的自由变量误当作 schema variable 再次替换。`subst_simul` 保证替换只在原始模板的 Var 位置进行。
-
-模板中的 `Var` 永远不会作为裸 schema variable 进入 typing 判断。
-
-### 5.1b `ProjectionInfo`                                            【v10 新增】
-
-```text
-class ProjectionInfo:
-    projectionName : GlobalName    # 投影的全局名字（如 Sigma.a、Point.x）
-    structName     : GlobalName    # 所属结构类型名（如 Sigma、Point）
-    index          : Nat           # 字段下标（0 = 第一个字段，1 = 第二个，...）
-```
-
-**评论：** `ProjectionInfo` 是 surface/elab 层的元数据 — 它记录投影名与结构名、字段下标的映射。`ProjectionInfo` **不**用于 kernel 计算：kernel 仍然只看 `Proj(structName, index, target)` — 那是 core/kernel 层的投影机制。`ProjectionInfo` 的唯一作用是让 elab 中的 `SProj` 和 `SDot` 分支把投影名翻译成 `Proj(structName, index, target_core)`。
-
-**例子：**
-
-```text
-Sigma:
-  ProjectionInfo(Sigma.a, Sigma, 0)    # Sigma.a 指向 Sigma 的第 0 个字段 a
-  ProjectionInfo(Sigma.b, Sigma, 1)    # Sigma.b 指向 Sigma 的第 1 个字段 b
-
-Prod:
-  ProjectionInfo(Prod.a, Prod, 0)      # Prod.a 指向 Prod 的第 0 个字段 a
-  ProjectionInfo(Prod.b, Prod, 1)      # Prod.b 指向 Prod 的第 1 个字段 b
-
-Point:
-  ProjectionInfo(Point.x, Point, 0)    # Point.x 指向 Point 的第 0 个字段 x
-  ProjectionInfo(Point.y, Point, 1)    # Point.y 指向 Point 的第 1 个字段 y
-```
-
-**投影名自动生成规则：** v10 中，投影名由 `qualified_name(typeName, fieldName)` 自动生成。用户在 StructureCmd 中提供 `typeName` 和各字段的 `fieldName`，exec 自动拼接为投影名。例如 `Point` 的字段 `x` → 投影名 `Point.x`。将来若想让用户自定义投影名（如 `Point.x` 也能叫 `Point.coord₁`），可以在 FieldDecl 中增加可选的投影名字段 — v10 暂不实现。
-
-**Method A vs Method B：** v10 采用 **Method A**：投影名只存在于 `State.Projections`（elaboration 元数据），**不**注册到 `State.Axioms`（即 `Const Sigma.a` 不是合法的 CoreTerm）。Method A 的理由：
-1. 若投影名进入 Axioms，就需要为它定义类型（如 `Sigma.a : Π (A : Sort 0), Π (B : Π(x:A), Sort 0), Π (p : Sigma A B), A`）和 whnf reduction rule（如 `App(App(App(Const Sigma.a, A), B), p) ↦ Proj(Sigma, 0, p)`）。这需要修改 kernel 或先有 DefCmd，对 v10 太重了。
-2. Method A 下 `SProj(Sigma.a, p)` 直接 elaborate 成 `Proj(Sigma, 0, p_core)` — 不需要经过 Axioms 或 whnf。这更简洁，也符合"kernel 不变"的原则。
-3. Method B（投影名作为全局常量）是将来可以切换的方向。真实 Lean 中 projection 是有类型和 reduction rule 的全局常量。当模型引入 DefCmd 和更完整的 whnf 机制后，可以自然切换到 Method B。
-
-### 5.1c `ProjectionInfo` well-formedness invariant                    【v10 新增】
-
-`S.Projections` 中的每个 `ProjectionInfo` 必须满足以下条件。若 `S.Projections[g] = proj_info`，记 `g` 为条目 key，`proj_info` 为 ProjectionInfo 值：
-
-1. **key 一致性：** `proj_info.projectionName = g`。（map 的 key 必须与记录内部的 projectionName 一致。）
-
-2. **投影名不与其他 State 字段冲突：** `g ∉ dom(S.Axioms) ∪ dom(S.Defs) ∪ dom(S.Structures)`。（注意 `g` 在 `dom(S.Projections)` 中是允许的——它就是自己的 key。）
-
-3. **所属结构名已注册：** `proj_info.structName ∈ dom(S.Structures)`。
-
-4. **字段下标合法：** 令 `info = S.Structures[proj_info.structName]`，则 `proj_info.index < len(info.fields)`。
-
-5. **自动命名一致：** `g = qualified_name(proj_info.structName, S.Structures[proj_info.structName].fields[proj_info.index].name)`。将来若支持用户自定义投影名，此条件需要放宽。
-
-6. **投影名唯一：** 若 `S.Projections[g₁] = p₁` 且 `S.Projections[g₂] = p₂` 且 `p₁.projectionName = p₂.projectionName`，则 `g₁ = g₂`。
-
-**评论：** 当前模型中所有 ProjectionInfo 都通过 `exec(StructureCmd)` 自动生成——投影名检查（§7.4）保证条件 2、结构名检查保证条件 3、字段下标由 enumerate 遍历保证条件 4、命名规则 `qualified_name(typeName, field.name)` 保证条件 5。没有 ProjectionInfo 是预置的，也没有 ProjectionInfo 可以脱离 StructureCmd 手动添加。
-
-### 5.2 `StructureInfo`
-
-```text
-class StructureInfo:
-    typeName    : GlobalName
-    constructor : GlobalName
-    params      : List[ParamInfo]     # 类型参数列表
-    fields      : List[FieldInfo]     # 字段列表
-```
-
-其中：
-- `typeName` 是结构类型的全局名字；
-- `constructor` 是该结构的构造子名字；
-- `params` 是类型参数列表，每个 `ParamInfo` 记录参数名和类型模板；
-- `fields` 是字段列表，每个 `FieldInfo` 记录字段名和类型模板；
-- `numParams = len(params)`、`numFields = len(fields)`。不再单独存储这两个字段，改用 `len()`。whnf 中的引用也相应更新。
-
-对于 `Sigma`（见 §5a）：
-
-```text
-StructureInfo(
-  typeName    = Sigma,
-  constructor = Sigma.mk,
-  params = [
-    ParamInfo(A, Sort(level 0)),
-    ParamInfo(B, Π (x : Var A), Sort(level 0))
-  ],
-  fields = [
-    FieldInfo(a, Var A),
-    FieldInfo(b, App(Var B, Var a))
-  ]
-)
-```
-
-含义：`ParamInfo(A, Sort(level 0))` 表示 Sigma 有一个参数名为 A、类型为 Sort 0。`FieldInfo(a, Var A)` 表示 Sigma 的第一个字段名为 a、类型模板为 Var A（经替换后变成实际的 A 值）。`FieldInfo(b, App(Var B, Var a))` 表示第二个字段名为 b、类型模板为 B 应用到 a（依赖第一个字段）。
-
-**评论：** v10 引入 `ProjectionInfo`（§5.1b），记录字段名字的全局投影名（如 `Sigma.a`、`Point.x`）。投影名用于 elaboration（`SProj` 和 `SDot`），不注册到 Axioms（Method A）。`Proj(structName, index, target)` 在 kernel 层仍然编码投影的全部信息 — 投影名属于 surface/elab 层，字段编号属于 core/kernel 层。
-
-### 5.2a `StructureInfo` well-formedness invariant
-
-`S.Structures` 中的每个 `StructureInfo` 必须满足以下条件：
-
-1. **类型名已注册且类型正确：** `info.typeName ∈ dom(S.Axioms)`，且 `S.Axioms[info.typeName] = make_structure_type(info)`。
-
-2. **构造子名已注册且类型正确：** `info.constructor ∈ dom(S.Axioms)`，且 `S.Axioms[info.constructor] = make_constructor_type(info)`。
-2. **参数名互不相同：** `info.params` 中所有 `ParamInfo.name` 互不相等。
-3. **字段名互不相同：** `info.fields` 中所有 `FieldInfo.name` 互不相等。
-4. **参数名和字段名互不相同：** 任何 `ParamInfo.name` 不等于任何 `FieldInfo.name`。
-5. **ParamInfo.type 的自由 schema variables 只引用前序 params：** `FV(info.params[i].type) ⊆ { info.params[0].name, ..., info.params[i-1].name }`。注意：此处说的是**自由变量**（FV），不是所有 `Var`。被 `Forall` 或 `Lam` binder 绑定的 `Var`（如 `Π (x : Var A), Sort 0` 中的 `Var x`）不是 schema variable，不受此约束。
-6. **FieldInfo.type 的自由 schema variables 只引用 params 和前序 fields：** `FV(info.fields[j].type) ⊆ { param names } ∪ { info.fields[0].name, ..., info.fields[j-1].name }`。
-7. **构造子参数顺序：** `info.constructor` 的类型签名中的参数顺序必须是先 `params` 后 `fields`。
-8. **构造子返回类型：** `info.constructor` 的类型签名的返回类型必须是 `(Const info.typeName)` 应用到所有参数变量上，即 `make_type_app(info.typeName, [param.name for param in info.params])`。
-
-**例子（Sigma）：**
-
-```text
-params:
-  A : Sort 0          # 只引用底层类型
-  B : Π (x : A), Sort 0   # B 引用了前序参数 A ✓
-
-fields:
-  a : A               # a 引用了参数 A ✓（不引用后续字段）
-  b : B a             # b 引用了参数 B 和前序字段 a ✓
-```
-
-注意 `b` 可以引用 `a`（因为 `a` 是前序字段），但 `a` 不能引用 `b`（因为 `b` 是后续字段）。这保证了 `projection_type` 的替换是完整的 — 所有 schema 变量都能被参数值和前序投影替换掉，不存在未解释的 schema variable。
-
-**评论：** 当前模型中所有 StructureInfo 都通过 `exec(StructureCmd)` 生成 — telescope 检查保证每个参数/字段类型都是 Sort（即 universe level 可计算），参数和字段的名字互不重复，字段类型模板中的 Var 引用只指向参数名或前序字段名。没有 StructureInfo 是预置的。
-
-### 5.3 `State`
-
-```text
-class State:
-    Axioms      : PartialMap[g : GlobalName, t : CoreTerm]                 # 写作 g : t
-    Defs        : PartialMap[g : GlobalName, Pair[t1 : CoreTerm, t2 : CoreTerm]]  # 写作 g : (t1, t2)
-    Structures  : PartialMap[g : GlobalName, info : StructureInfo]          # 写作 g ↦ info
-    Projections : PartialMap[g : GlobalName, info : ProjectionInfo]         # 写作 g ↦ proj_info   【v10 新增】
-```
-
-若 `S : State`，则：
-
-```text
-S.Axioms
-S.Defs
-S.Structures
-S.Projections
-```
-
-分别表示该状态中的四个字段。
-
-其中：
-- 若 `S.Axioms.get(n) = A`，则表示：全局名字 `n` 被声明为 axiom，类型是 `A`。
-- 若 `S.Defs.get(n) = Pair(A, t)`，则表示：全局名字 `n` 被声明为 def，类型是 `A`，body 是 `t`。
-- 若 `S.Structures.get(n) = info`，则表示：`n` 是一个已登记的结构类型，结构信息是 `info`。
-- 若 `S.Projections.get(n) = proj_info`，则表示：全局名字 `n` 是一个投影名，投影信息是 `proj_info`。
-
-注意：`S.Structures.get(Sigma)` 不是天生存在的。它必须来自某个具体状态。当前模型中 Sigma 的 StructureInfo 来自 `exec(StructureCmd Sigma ...)`（见 §15b.1），不再预置。`S.Projections` 中的所有 ProjectionInfo 也由 `exec(StructureCmd)` 自动生成 — 没有 ProjectionInfo 是预置的。
-
----
-## 5a. 初始状态与结构缩写
-
-### 5a.1 初始状态 S₀
-
-当前模型不预置任何结构。初始状态为空：
-
-```text
-S₀.Axioms = {}
-S₀.Defs = {}
-S₀.Structures = {}
-S₀.Projections = {}
-```
-
-所有结构（包括 Sigma 和 Prod）都通过 StructureCmd 定义（见 §15b）。所有 ProjectionInfo 也由 StructureCmd 自动生成。
-
-为后续引用方便，取全局名字：
-
-```text
-Sigma, Sigma.mk, Prod, Prod.mk : GlobalName
-```
-
-取字段短名：
-
-```text
-a, b : LocalName
-```
-
-定义以下元语言缩写（不表示这些名字已存在于 State 中；只有执行对应 StructureCmd 后，ProjectionInfo 才会写入 S.Projections）：
-
-```text
-Sigma.a := qualified_name(Sigma, a)
-Sigma.b := qualified_name(Sigma, b)
-Prod.a  := qualified_name(Prod, a)
-Prod.b  := qualified_name(Prod, b)
-```
-
-**评论：** v10 引入投影名 `Sigma.a / Sigma.b / Prod.a / Prod.b`。它们不是 Axioms 中的全局常量（Method A），而是 `State.Projections` 中的元数据 — 用于 elaboration（`SProj` 和 `SDot`）把投影名翻译成 `Proj(structName, index, target_core)`。注意：我们的模型中 Sigma 的字段名是 `a` 和 `b`（不是 Lean 的 `fst` 和 `snd`），所以投影名是 `Sigma.a` 和 `Sigma.b`（不是 Lean 的 `Sigma.fst` 和 `Sigma.snd`）。如果将来让用户在 FieldDecl 中自定义投影名，就可以声明 `structure Sigma where fst : A, snd : B a`，投影名自然变成 `Sigma.fst` 和 `Sigma.snd`。
-
-### 5a.2 `Sigma` 与 `Sigma.mk` 的类型
-
-为避免 universe polymorphism，当前模型使用单宇宙版本。以下类型由 StructureCmd Sigma 自动生成（完整推导见 §15b.1），此处列出供参考：
-
-```text
-Sigma : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0
-Sigma.mk : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B
-```
-
-含义：给定 `A : Sort 0` 和 `B : Π (x : A), Sort 0`，得到 `Sigma A B : Sort 0`。给定 `a : A` 和 `b : B a`，得到 `Sigma.mk A B a b : Sigma A B`。
-
-**评论：** 完整 Lean 版本的 `Sigma` 是 universe-polymorphic 且有 implicit arguments。当前模型没有这些机制，所以用单宇宙显式版本。
-
-### 5a.4 缩写：SΣ 与 SΣΠ
-
-定义方便缩写：
-
-```text
-SΣ  = exec(S₀, StructureCmd Sigma Sigma.mk
-  params = [A : SSort 0, B : SForall(x, SVar A, SSort 0)]
-  fields = [a : SVar A, b : SApp(SVar B, SVar a)])      （完整推导见 §15b.1）
-
-SΣΠ = exec(SΣ, StructureCmd Prod Prod.mk
-  params = [A : SSort 0, B : SSort 0]
-  fields = [a : SVar A, b : SVar B])                     （完整推导见 §15b.2）
-```
-
-SΣ 的内容（供参考）：
-
-```text
-SΣ.Axioms = {
-  Sigma :
-    Π (A : Sort (level 0)),
-    Π (B : Π (x : Var A), Sort (level 0)),
-    Sort (level 0),
-
-  Sigma.mk :
-    Π (A : Sort (level 0)),
-    Π (B : Π (x : Var A), Sort (level 0)),
-    Π (a : Var A),
-    Π (b : (Var B) (Var a)),
-    (Const Sigma) (Var A) (Var B)
-}
-
-SΣ.Defs = {}
-
-SΣ.Structures = {
-  Sigma : StructureInfo(Sigma, Sigma.mk, [
-    ParamInfo(A, Sort(level 0)),
-    ParamInfo(B, Π (x : Var A), Sort(level 0))
-  ], [
-    FieldInfo(a, Var A),
-    FieldInfo(b, App(Var B, Var a))
-  ])
-}
-
-SΣ.Projections = {
-  Sigma.a ↦ ProjectionInfo(Sigma.a, Sigma, 0),     # Sigma 的第 0 个字段 a
-  Sigma.b ↦ ProjectionInfo(Sigma.b, Sigma, 1)      # Sigma 的第 1 个字段 b
-}
-```
-
-**评论：** `Sigma` 不是模型宇宙里自动存在的魔法对象。当前模型中 `Sigma` 的类型签名和 StructureInfo 由 `exec(StructureCmd Sigma Sigma.mk ...)` 自动生成 — 不再预置。`Sigma.a` 和 `Sigma.b` 的 ProjectionInfo 也由 StructureCmd 自动生成 — 不需要手动注册。
-
----
-## 5b. 类型生成辅助函数
-
 本节定义四个辅助函数，用于从 `StructureInfo` 生成 type constructor 和 constructor 的 CoreTerm 类型。它们只依赖 `CoreTerm`（§4）和 `StructureInfo`/`ParamInfo`/`FieldInfo`（§5）— 不调用 `elab`、`whnf`、`infer_type`。
 
-`exec(StructureCmd)` 会调用这些函数（§7），把生成的类型写入 `S.Axioms`。
+`exec(StructureCmd)` 会调用这些函数（§9），把生成的类型写入 `S.Axioms`。
 
-### 5b.1 `make_forall_chain`
+### 6.1 `make_forall_chain`
 
 ```python
 # 写作 make_forall_chain(telescope, body)
@@ -713,7 +689,7 @@ make_forall_chain([], Sort(level 0))
 
 **评论：** `telescope` 中的 `type` 可能含有 `Var` 引用前序名字 — 这些会被 `Forall` 的 binder 正确绑定。例如第二个参数 `Forall(x, Var A, Sort(level 0))` 中的 `Var A` 被外层 `Forall(A, ...)` 的 binder 绑定，不会成为自由变量。
 
-### 5b.2 `make_type_app`
+### 6.2 `make_type_app`
 
 ```python
 # 写作 make_type_app(typeName, paramNames)
@@ -739,7 +715,7 @@ make_type_app(UnitLike, [])  = Const UnitLike
 
 **评论：** 这是构造子返回类型的构建器。在 constructor 的类型签名中，返回类型是 `(Const typeName)` 应用到所有参数变量上。
 
-### 5b.3 `make_structure_type`
+### 6.3 `make_structure_type`
 
 ```python
 # 写作 make_structure_type(info)
@@ -747,7 +723,7 @@ def make_structure_type(info : StructureInfo) -> CoreTerm:
     '''
     从 StructureInfo 生成 type constructor 的类型。
     结果 = Π params..., Sort(level 0)
-    当前模型简化：所有结构的结果类型固定为 Sort(level 0)。
+    v9 简化：所有结构的结果类型固定为 Sort(level 0)。
     Universe polymorphism 和自动 universe inference 以后再加。
     '''
     telescope = []
@@ -757,7 +733,7 @@ def make_structure_type(info : StructureInfo) -> CoreTerm:
     return make_forall_chain(telescope, Sort(level 0))
 ```
 
-**评论（简化版 universe）：** 当前模型暂时只支持单宇宙结构 — 所有 StructureCmd 生成的结构类型结果都固定为 `Sort(level 0)`。这不是通过参数类型的 universe 自动推导出来的，而是当前模型的简化约定。例如 Sigma 中参数 B 的类型 `Π (x : A), Sort 0` 本身生活在 Sort 1，但 `Sigma A B` 仍被本模型规定为 `Sort 0`。完整实现需要显式处理 universe 参数和 result sort，或进行 universe constraint inference；结构结果 universe 不是简单从 `param.type` 的 universe 自动取 `max` 得到（否则 Sigma 会得到 Sort 1，而非期望的 Sort 0）。当前模型暂不处理这些机制，直接固定结构结果为 `Sort(level 0)`。Universe polymorphism 和更真实的 universe inference 以后再加。
+**评论（简化版 universe）：** 当前模型暂时只支持单宇宙结构 — 所有 StructureCmd 生成的结构类型结果都固定为 `Sort(level 0)`。这不是通过参数类型的 universe 自动推导出来的，而是 v9 的简化约定。例如 Sigma 中参数 B 的类型 `Π (x : A), Sort 0` 本身生活在 Sort 1，但 `Sigma A B` 仍被本模型规定为 `Sort 0`。完整实现需要显式处理 universe 参数和 result sort，或进行 universe constraint inference；结构结果 universe 不是简单从 `param.type` 的 universe 自动取 `max` 得到（否则 Sigma 会得到 Sort 1，而非期望的 Sort 0）。v9 暂时不处理这些机制，直接固定结构结果为 `Sort(level 0)`。Universe polymorphism 和更真实的 universe inference 以后再加。
 
 **例子：**
 
@@ -780,7 +756,7 @@ telescope = `[(A, Sort(level 0)), (B, Forall(x, Var A, Sort(level 0)))]`
 
 这与 `SΣ.Axioms[Sigma]` 中由 StructureCmd 生成的 Sigma 类型完全一致 ✓
 
-对于 Point（将在 §15b 定义）：
+对于 Point（将在 §17 定义）：
 
 ```text
 make_structure_type(StructureInfo(Point, Point.mk, [
@@ -801,7 +777,7 @@ telescope = `[(X, Sort(level 0))]`
 
 即 `Point : Π (X : Sort 0), Sort 0`。
 
-### 5b.4 `make_constructor_type`
+### 6.4 `make_constructor_type`
 
 ```python
 # 写作 make_constructor_type(info)
@@ -903,7 +879,7 @@ body = `make_type_app(Prod, [A, B])` = `(Const Prod) (Var A) (Var B)`
 Prod A B
 ```
 
-### 5b.5 评论
+### 6.5 评论
 
 四个辅助函数的关键特性：
 
@@ -916,7 +892,7 @@ Prod A B
 4. **exec 调用这些函数时，ParamInfo.type 和 FieldInfo.type 已经是 elaborated 的 CoreTerm**：用户在 StructureCmd 中写的是 SurfaceTerm（ParamDecl/FieldDecl），exec 先 elaborates 每个类型得到 CoreTerm，然后构建 ParamInfo/FieldInfo，最后调用 make_structure_type 和 make_constructor_type。
 
 ---
-## 6. 顶层命令 `Command`
+## 7. 顶层命令 `Command`
 
 新增两个数据类型，作为 StructureCmd 的组成部分：
 
@@ -951,12 +927,46 @@ StructureCmd Point Point.mk
 
 这意味着：声明一个 structure 名为 Point，构造子为 Point.mk，一个参数 X : Sort 0，两个字段 x : X, y : X。
 
-**评论：** StructureCmd 让用户声明一个 structure，exec 会自动生成 type constructor 的类型签名、constructor 的类型签名、StructureInfo 以及每个字段的 ProjectionInfo。用户必须同时给出 typeName 和 constructor 名字（如 Point 和 Point.mk）— 这避免了自动命名策略的复杂性。
+**评论：** StructureCmd 是 v9 的核心新增。它让用户声明一个 structure，exec 会自动生成 type constructor 的类型签名、constructor 的类型签名，以及 StructureInfo。用户必须同时给出 typeName 和 constructor 名字（如 Point 和 Point.mk）— 这避免了自动命名策略的复杂性。
 
 用户写 `SurfaceTerm`；`exec` 会先通过 `elab` 转换为 `CoreTerm` 再存储。
 
 ---
-## 7. 状态执行函数 `exec`
+## 8. `Context`
+
+定义上下文类型 `Context`：
+
+```text
+class Context:
+    Types : PartialMap[n : LocalName, t : CoreTerm]   # 写作 n : t
+```
+
+若 `Γ : Context`，则 `Γ.Types` 表示这个上下文中记录局部变量类型的映射。
+
+### 8.1 上下文扩展
+
+```python
+# 写作 Γ, x : A
+# 也写作 expand_context(Γ, x, A)
+def expand_context(Γ : Context, x : LocalName, A : CoreTerm) -> Context:
+    return Context(
+        Types = Γ.Types[x -> A]
+    )
+```
+
+---
+## 9. 状态执行函数 `exec`                                         【v10 修改】
+
+> **前向引用说明：** `exec` 内部调用以下函数，它们都在文档后面才详细定义。这里给出每个函数的简要功能，阅读时可将它们视为已定义的操作：
+>
+> | 函数 | 简要功能 | 详细定义 |
+> |------|---------|---------|
+> | `elab(S, Γ, st, expected)` | 将 SurfaceTerm 转换为 CoreTerm（elaboration） | §15 |
+> | `infer_type(S, Γ, t)` | 推断 CoreTerm 的类型 | §14.3 |
+> | `check_type(S, Γ, t, A)` | 检查 CoreTerm 是否具有给定类型 | §14.3 |
+> | `whnf(S, t)` | 弱头部正规化（化简 term） | §12 |
+>
+> 文档按依赖关系的反向顺序组织：先定义底层 kernel 函数（`whnf`、`defeq`、`infer_type`），再定义上层（`elab`、`exec`）。`exec` 紧跟在 `Command`（§7）定义之后，便于读者理解命令如何执行。
 
 定义一个部分函数：
 
@@ -964,27 +974,21 @@ StructureCmd Point Point.mk
 exec(S : State, cmd : Command) -> State
 ```
 
-### 7.0 辅助函数                                                  【v10 新增】
-
-**名字冲突检查（v10 四字段版本）：**
+定义名字占用辅助函数：
 
 ```python
-# 写作 name_is_used(S, n)
-def name_is_used(S : State, n : GlobalName) -> bool:
-    '''
-    检查名字 n 是否已被 S 的四个名字空间中的任何一个使用。
-    '''
+# 写作 declaration_name_is_used(S, n)
+def declaration_name_is_used(S : State, n : GlobalName) -> Bool:
     return (
-        n in S.Axioms or
-        n in S.Defs or
-        n in S.Structures or
-        n in S.Projections
+        S.Axioms.contains(n)
+        or S.Defs.contains(n)
+        or S.Projections.contains(n)
     )
 ```
 
-此函数在所有命令分支中复用。后续版本扩展 `State` 字段时只需要修改此处即可。
+`Structures` 不单独加入这个判断，因为每个结构的 `typeName` 已经同时存在于 `Axioms`；`Structures` 是该声明的附加元数据，不是另一个独立名字空间。
 
-### 7.1 状态转移记号
+### 9.1 状态转移记号
 
 约定：
 
@@ -994,7 +998,7 @@ S --cmd--> S'
 
 作为 `exec(S, cmd) = S'` 的简写。
 
-### 7.2 规则 1：执行 `AxiomCmd`
+### 9.2 规则 1：执行 `AxiomCmd`
 
 若：
 
@@ -1002,7 +1006,7 @@ S --cmd--> S'
 cmd = AxiomCmd(n, A_surf)
 A_core = elab(S, ∅, A_surf, None)
 infer_type(S, ∅, A_core) : Sort u                    （声明的类型本身必须是 type）
-not name_is_used(S, n)
+not declaration_name_is_used(S, n)
 ```
 
 则：
@@ -1022,9 +1026,9 @@ S' = State(
 )
 ```
 
-**评论：** `infer_type(S, ∅, A_core) : Sort u` 确保声明的类型本身是一个 type。否则用户可以错误地声明 `AxiomCmd bad : Const zero` — `Const zero : Const Nat` 不是 type。此外，v10 新增了 `S.Projections`，新名字也不应与已有投影名冲突。
+**评论：** `infer_type(S, ∅, A_core) : Sort u` 确保声明的类型本身是一个 type。否则用户可以错误地声明 `AxiomCmd bad : Const zero` — `Const zero : Const Nat` 不是 type。`declaration_name_is_used` 还保证新名字不会占用已有的 axiom、def 或 projection 名。
 
-### 7.3 规则 2：执行 `DefCmd`
+### 9.3 规则 2：执行 `DefCmd`
 
 若：
 
@@ -1033,7 +1037,7 @@ cmd = DefCmd(n, A_surf, t_surf)
 A_core = elab(S, ∅, A_surf, None)
 infer_type(S, ∅, A_core) : Sort u                    （声明的类型本身必须是 type）
 t_core = elab(S, ∅, t_surf, A_core)
-not name_is_used(S, n)
+not declaration_name_is_used(S, n)
 check_type(S, ∅, t_core, A_core)
 ```
 
@@ -1054,34 +1058,32 @@ S' = State(
 )
 ```
 
-### 7.4 规则 3：执行 `StructureCmd`                            【v10 修改】
+### 9.4 规则 3：执行 `StructureCmd`
 
 若：
 
 ```text
 cmd = StructureCmd(typeName, constructor, param_decls, field_decls)
 typeName ≠ constructor
-not name_is_used(S, typeName)
-not name_is_used(S, constructor)
+not declaration_name_is_used(S, typeName)
+not declaration_name_is_used(S, constructor)
 ```
-
-并要求：所有自动生成的投影名 `qualified_name(typeName, fieldDecl.name)` 互不相同，且不能等于 `typeName` 或 `constructor`，且 `not name_is_used(S, projName)`。v10 的命名规则：投影名 = `qualified_name(typeName, fieldName)`。
 
 执行分五步：
 
-**第一步：名字检查** — `typeName ≠ constructor`（避免同名导致状态更新时覆盖），且 `typeName` 和 `constructor` 不与已有全局名字冲突。同时检查所有投影名不与已有名字冲突。
+**第一步：名字检查** — `typeName ≠ constructor`（避免同名导致状态更新时覆盖），且 `typeName` 和 `constructor` 不与已有全局名字冲突。
 
 **第二步：Telescope 检查** — 逐个 elaborate params 和 fields 的类型，在每个步骤中验证类型是 Sort，并在扩展上下文中处理后续项。
 
 ```text
 Γ0 = ∅
 
-对于每个 ParamDecl(p_i, T_i_surf):
+对于 param_decls 中的每个 ParamDecl(p_i : LocalName, T_i_surf : SurfaceTerm):
   T_i_core = elab(S, Γ_i, T_i_surf, None)
   whnf(S, infer_type(S, Γ_i, T_i_core)) 必须是 Sort u_i
   Γ_{i+1} = Γ_i, p_i : T_i_core
 
-对于每个 FieldDecl(f_j, F_j_surf):
+对于 field_decls 中的每个 FieldDecl(f_j : LocalName, F_j_surf : SurfaceTerm):
   F_j_core = elab(S, Γ_{n+j}, F_j_surf, None)
   whnf(S, infer_type(S, Γ_{n+j}, F_j_core)) 必须是 Sort v_j
   Γ_{n+j+1} = Γ_{n+j}, f_j : F_j_core
@@ -1089,14 +1091,14 @@ not name_is_used(S, constructor)
 
 其中 `n = len(param_decls)`。注意 fields 的 elaboration 在扩展了所有 params 的上下文中进行 — 这保证了依值类型（如 `b : B a` 中 `B` 引用前序参数 `A`、`a` 引用前序字段 `a`）的正确性。
 
-**第三步：类型生成** — 构建 StructureInfo，然后调用 `make_structure_type` 和 `make_constructor_type`（§5b）。
+**第三步：类型生成** — 构建 StructureInfo，然后调用 `make_structure_type` 和 `make_constructor_type`（§6）。
 
 ```text
 info = StructureInfo(
   typeName    = typeName,
   constructor = constructor,
-  params      = [ParamInfo(p_i.name, T_i_core) for each param],
-  fields      = [FieldInfo(f_j.name, F_j_core) for each field]
+  params      = [ParamInfo(p_i, T_i_core) for each param],
+  fields      = [FieldInfo(f_j, F_j_core) for each field]
 )
 
 type_type = make_structure_type(info)
@@ -1106,51 +1108,52 @@ whnf(S, infer_type(S, ∅, type_type)) 必须是 Sort u₁
 
 # constructor_type 的返回类型中引用 Const typeName，
 # 所以先临时加入 typeName，再验证 constructor_type
-S_tmp = State(Axioms = S.Axioms.set(typeName, type_type), Defs = S.Defs, Structures = S.Structures, Projections = S.Projections)
+S_tmp = State(
+    Axioms = S.Axioms.set(typeName, type_type),
+    Defs = S.Defs,
+    Structures = S.Structures,
+    Projections = S.Projections
+)
 constructor_type = make_constructor_type(info)
 
 whnf(S_tmp, infer_type(S_tmp, ∅, constructor_type)) 必须是 Sort u₂
 ```
 
-**第四步：ProjectionInfo 生成**（v10 新增）— 为每个字段自动生成 ProjectionInfo。生成前增加额外检查：投影名不能等于 `typeName` 或 `constructor`，且本次生成的投影名之间不能重复。
+**第四步：生成 ProjectionInfo** — 为每个字段生成投影信息。    【v10 新增】
 
 ```text
-projection_infos = []
-for j, field in enumerate(info.fields):
-    projName = qualified_name(typeName, field.name)      # 投影名 = qualified_name(typeName, fieldName)
-    if projName == typeName or projName == constructor:
-        raise Error                             # 投影名不能与 typeName 或 constructor 相同
-    if projName in [pi[0] for pi in projection_infos]:
-        raise Error                             # 本次生成的投影名不能重复
-    # projName 与已有全局名字的冲突检查已在第一步完成
-    projection_infos.append((projName, ProjectionInfo(projName, typeName, j)))
+proj_infos = {}
+for field_index, field in enumerate(info.fields):
+    proj_name = append_local(info.typeName, field.name)
+    if declaration_name_is_used(S, proj_name)
+       or proj_name = typeName
+       or proj_name = constructor:
+        raise Error
+    proj_infos[proj_name] = ProjectionInfo(proj_name, info.typeName, field_index)
 ```
 
-**评论：** 投影名由 `typeName` 和 `fieldName` 自动拼接。例如 Point 的字段 x → `Point.x`。将来若想让用户自定义投影名，可以在 FieldDecl 中增加可选的投影名字段。v10 暂不实现。
+**评论：** 第四步为每个字段生成唯一的投影名（如 `Sigma.a`、`Sigma.b`），并将 `ProjectionInfo` 写入 `S.Projections`。这使得后续 `SProj` 和 `SDot` 的 elaboration 可以通过投影名查找到结构名和字段下标。
 
 **第五步：状态更新**
 
 ```text
 S' = State(
-    Axioms     = S_tmp.Axioms.set(constructor, constructor_type),
-    Defs       = S.Defs,
-    Structures = S.Structures.set(typeName, info),
-    Projections = S.Projections.set(projName₁, proj_info₁)
-                    .set(projName₂, proj_info₂)
-                    ...                              （每个字段一个 ProjectionInfo）
+    Axioms      = S_tmp.Axioms.set(constructor, constructor_type),
+    Defs        = S.Defs,
+    Structures  = S.Structures.set(typeName, info),
+    Projections = merge(S.Projections, proj_infos)
 )
 ```
 
 **评论：**
 
-- StructureCmd 是 State 生成器，不产生 CoreTerm。它修改 State（加两个 Axiom、加一个 StructureInfo、加若干 ProjectionInfo），之后所有已有的 kernel 规则和 elaboration 规则自动生效。
+- StructureCmd 是 State 生成器，不产生 CoreTerm。它修改 State（加两个 Axiom、一个 StructureInfo 和每个字段的 ProjectionInfo），之后所有已有的 kernel 规则自动生效。
 - Telescope 检查保证 §5.2a 的 well-formedness invariant：每个 param/field 类型在正确的上下文中 elaborated，确保类型正确、引用合法。
 - 字段类型的 elaboration 在包含所有参数的上下文中进行。例如 `b : B a` 中，`B` 和 `a` 都可以在上下文中找到 — `B` 是参数名（在前面的 Γ 扩展中加入），`a` 是前序字段名（在更前面的 Γ 扩展中加入）。这正是 telescope 的含义：参数和字段组成一个逐步扩展的上下文链。
-- `make_structure_type` 和 `make_constructor_type` 在 §5b 定义，只依赖 CoreTerm 和 StructureInfo。它们不调用 elab/whnf/infer_type。
+- `make_structure_type` 和 `make_constructor_type` 在 §6 定义，只依赖 CoreTerm 和 StructureInfo。它们不调用 elab/whnf/infer_type。
 - 第三步新增对生成类型的验证：`type_type` 和 `constructor_type` 都必须通过 `infer_type` 检查（结果必须是 Sort）。`constructor_type` 的返回类型中引用 `Const typeName`，所以需要先临时将 `typeName` 加入状态，才能正确验证 `constructor_type`。这防止了 `make_constructor_type` 的潜在 bug 导致 ill-typed 的 constructor type 被写入 Axioms。
-- v10 第四步新增 ProjectionInfo 生成：为每个字段自动生成一个 ProjectionInfo，投影名 = `qualified_name(typeName, fieldName)`。这些 ProjectionInfo 存入 `S.Projections`，供 elab 的 `SProj` 和 `SDot` 分支查询。投影名不注册到 Axioms（Method A）— 它们是 elaboration 元数据，不是全局常量。
 
-### 7.5 `exec` 完整代码                                         【v10 修改】
+### 9.5 `exec` 完整代码
 
 ```python
 # 写作 exec(S, cmd)
@@ -1158,8 +1161,11 @@ def exec(S: State, cmd: Command) -> State:
     '''
     执行顶层命令并返回更新后的状态。
     Command 中的 term 是 SurfaceTerm，需要先通过 elab 转换为 CoreTerm。
-    v10：AxiomCmd / DefCmd 不修改 Projections；
-    StructureCmd 新增 ProjectionInfo 生成（每个字段一个）。
+    v9：exec 新增 StructureCmd 分支；
+    v10：StructureCmd 还会生成 ProjectionInfo；
+    AxiomCmd / DefCmd 不修改 Structures 和 Projections；
+    StructureCmd 会新增 typeName、constructor（Axioms）、
+    StructureInfo（Structures）和字段投影元数据（Projections）。
     '''
 
     if isinstance(cmd, AxiomCmd):
@@ -1168,7 +1174,7 @@ def exec(S: State, cmd: Command) -> State:
         TA = whnf(S, infer_type(S, ∅, A_core))
         if not isinstance(TA, Sort):
             raise Error
-        if not name_is_used(S, n):
+        if not declaration_name_is_used(S, n):
             return State(
                 Axioms = S.Axioms.set(n, A_core),
                 Defs   = S.Defs,
@@ -1184,7 +1190,7 @@ def exec(S: State, cmd: Command) -> State:
         if not isinstance(TA, Sort):
             raise Error
         t_core = elab(S, ∅, t_surf, A_core)
-        if name_is_used(S, n):
+        if declaration_name_is_used(S, n):
             raise Error
         if not check_type(S, ∅, t_core, A_core):
             raise Error
@@ -1201,21 +1207,10 @@ def exec(S: State, cmd: Command) -> State:
         # 第一步：名字检查
         if typeName == constructor:
             raise Error                    # typeName 和 constructor 不能相同
-        if name_is_used(S, typeName):
+        if declaration_name_is_used(S, typeName):
             raise Error
-        if name_is_used(S, constructor):
+        if declaration_name_is_used(S, constructor):
             raise Error
-        # v10 新增：检查投影名不冲突
-        projection_names = []
-        for f_decl in field_decls:
-            projName = qualified_name(typeName, f_decl.name)
-            if projName == typeName or projName == constructor:
-                raise Error                # 投影名不能等于 typeName 或 constructor
-            if projName in projection_names:
-                raise Error                # 本次生成的投影名不能重复
-            if name_is_used(S, projName):
-                raise Error                # 投影名不能与已有全局名字冲突
-            projection_names.append(projName)
 
         # 第二步：Telescope 检查 — 逐个 elaborate param/field 类型
         # 同时检查所有 param/field 名字互不重复
@@ -1268,233 +1263,131 @@ def exec(S: State, cmd: Command) -> State:
         if not isinstance(T_constructor_type, Sort):
             raise Error
 
-        # 第四步：ProjectionInfo 生成（v10 新增）
-        projection_infos = []
-        for j, field in enumerate(info.fields):
-            projName = projection_names[j]
-            projection_infos.append((projName, ProjectionInfo(projName, typeName, j)))
+        # 第四步：生成 ProjectionInfo          【v10 新增】
+        proj_infos = {}
+        for idx, field in enumerate(field_infos):
+            proj_name = append_local(typeName, field.name)
+            if (declaration_name_is_used(S, proj_name)
+                    or proj_name == typeName
+                    or proj_name == constructor):
+                raise Error
+            proj_infos[proj_name] = ProjectionInfo(proj_name, typeName, idx)
 
         # 第五步：状态更新
-        new_projections = S.Projections
-        for projName, proj_info in projection_infos:
-            new_projections = new_projections.set(projName, proj_info)
-
         return State(
-            Axioms     = S_tmp.Axioms.set(constructor, constructor_type),
-            Defs       = S.Defs,
-            Structures = S.Structures.set(typeName, info),
-            Projections = new_projections
+            Axioms      = S_tmp.Axioms.set(constructor, constructor_type),
+            Defs        = S.Defs,
+            Structures  = S.Structures.set(typeName, info),
+            Projections = merge(S.Projections, proj_infos)
         )
 
     raise Error
 ```
 
-`elab` 在 §15a 定义。这是一个不可避免的前向引用：`exec` 处理用户输入（SurfaceTerm），必须调用 `elab` 来转换；而 `elab` 又调用 `infer_type`/`check_type`（§14）来验证类型。概念上，`exec` → `elab` → `infer_type/check_type` → `whnf/defeq`。文档按照依赖关系的反向顺序排列：先定义底层（`whnf`、`defeq`、`infer_type`），再定义上层（`elab`、`exec`）。
+（关于 `elab` 和 `infer_type` 的前向引用说明见 §9 开头。）
 
 ---
-## 8. `Context`
+## 10. 初始状态与结构缩写                                      【v10 修改】
 
-定义上下文类型 `Context`：
+### 10.1 初始状态 S₀
+
+v9 不再预置任何结构。初始状态为空：
 
 ```text
-class Context:
-    Types : PartialMap[n : LocalName, t : CoreTerm]   # 写作 n : t
+S₀.Axioms = {}
+S₀.Defs = {}
+S₀.Structures = {}
+S₀.Projections = {}
 ```
 
-若 `Γ : Context`，则 `Γ.Types` 表示这个上下文中记录局部变量类型的映射。
+所有结构（包括 Sigma 和 Prod）都通过 StructureCmd 定义（见 §17）。
 
-### 8.1 上下文扩展
+为后续引用方便，取全局名字：
 
-```python
-# 写作 Γ, x : A
-# 也写作 expand_context(Γ, x, A)
-def expand_context(Γ : Context, x : LocalName, A : CoreTerm) -> Context:
-    return Context(
-        Types = Γ.Types[x -> A]
-    )
+```text
+Sigma, Sigma.mk, Prod, Prod.mk : GlobalName
 ```
 
----
-## 9. `HasType` 的具体定义
+这些名字在 StructureCmd 中由用户提供（见 §7）。并要求所有名字互不相同。
 
-`HasType` 是 `State × Context × CoreTerm × CoreTerm` 的最小子集，满足以下规则。
+当前模型暂时**不引入** `Sigma.fst / Sigma.snd / Prod.fst / Prod.snd`。因为 `Proj(Sigma, 0, p)` 和 `Proj(Sigma, 1, p)` 已经表达了投影。
 
-核心设计：**Sigma 类型的 formation、pair 的 introduction、fst/snd 的 elimination 不再需要专门的 HasType 规则。** 它们由基础的 `Const` 和 `App` 规则覆盖 — 因为 Sigma 现在是 `Const Sigma`，pair 是 `(Const Sigma.mk) A B a b`，它们的类型通过普通函数应用规则计算。
+### 10.2 `Sigma` 与 `Sigma.mk` 的类型
 
-唯一新增的规则是 `Proj` 的 elimination rule。
+为避免 universe polymorphism，当前模型使用单宇宙版本。以下类型由 StructureCmd Sigma 自动生成（完整推导见 §17.1），此处列出供参考：
 
-### 9.1 基本 typing 规则
+```text
+Sigma : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0
+Sigma.mk : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B
+```
 
-- **Var 规则**
+含义：给定 `A : Sort 0` 和 `B : Π (x : A), Sort 0`，得到 `Sigma A B : Sort 0`。给定 `a : A` 和 `b : B a`，得到 `Sigma.mk A B a b : Sigma A B`。
 
-  若：
+**评论：** 完整 Lean 版本的 `Sigma` 是 universe-polymorphic 且有 implicit arguments。当前模型没有这些机制，所以用单宇宙显式版本。
 
-  ```text
-  Γ.Types.get(x) = A
-  ```
+### 10.3 缩写：SΣ 与 SΣΠ
 
-  则：
+定义方便缩写：
 
-  ```text
-  S ; Γ ⊢ Var x : A
-  ```
+```text
+SΣ  = exec(S₀, StructureCmd Sigma Sigma.mk
+  params = [A : SSort 0, B : SForall(x, SVar A, SSort 0)]
+  fields = [a : SVar A, b : SApp(SVar B, SVar a)])      （完整推导见 §17.1）
 
-- **Const-axiom 规则**
+SΣΠ = exec(SΣ, StructureCmd Prod Prod.mk
+  params = [A : SSort 0, B : SSort 0]
+  fields = [a : SVar A, b : SVar B])                     （完整推导见 §17.2）
+```
 
-  若：
+SΣ 的内容（供参考）：
 
-  ```text
-  S.Axioms.get(n) = A
-  ```
+```text
+SΣ.Axioms = {
+  Sigma :
+    Π (A : Sort (level 0)),
+    Π (B : Π (x : Var A), Sort (level 0)),
+    Sort (level 0),
 
-  则：
+  Sigma.mk :
+    Π (A : Sort (level 0)),
+    Π (B : Π (x : Var A), Sort (level 0)),
+    Π (a : Var A),
+    Π (b : (Var B) (Var a)),
+    (Const Sigma) (Var A) (Var B)
+}
 
-  ```text
-  S ; Γ ⊢ Const n : A
-  ```
+SΣ.Defs = {}
+SΣ.Projections = {
+  Sigma.a : ProjectionInfo(Sigma.a, Sigma, 0),
+  Sigma.b : ProjectionInfo(Sigma.b, Sigma, 1)
+}
 
-- **Const-def 规则**
+SΣ.Structures = {
+  Sigma : StructureInfo(Sigma, Sigma.mk, [
+    ParamInfo(A, Sort(level 0)),
+    ParamInfo(B, Π (x : Var A), Sort(level 0))
+  ], [
+    FieldInfo(a, Var A),
+    FieldInfo(b, App(Var B, Var a))
+  ])
+}
+```
 
-  若：
-
-  ```text
-  S.Defs.get(n) = Pair(A, t)
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Const n : A
-  ```
-
-### 9.2 `Sort / Π / fun / App` 规则
-
-- **Sort 规则**
-
-  若：
-
-  ```text
-  v = succ_level(u)
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Sort u : Sort v
-  ```
-
-- **Forall 规则**
-
-  若：
-
-  ```text
-  S ; Γ ⊢ A : Sort u
-  S ; (Γ, x : A) ⊢ B : Sort v
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Forall(x, A, B) : Sort (max_level(u, v))
-  ```
-
-- **Lam 规则**
-
-  若：
-
-  ```text
-  S ; Γ ⊢ A : Sort u
-  S ; (Γ, x : A) ⊢ t : B
-  S ; (Γ, x : A) ⊢ B : Sort v
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Lam(x, A, t) : Forall(x, A, B)
-  ```
-
-- **App 规则**
-
-  若：
-
-  ```text
-  S ; Γ ⊢ f : Forall(x, A, B)
-  S ; Γ ⊢ a : A
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ App(f, a) : B[x := a]
-  ```
-
-### 9.3 `Proj` 规则
-
-- **Proj 规则**（一般投影 elimination rule）
-
-  若：
-
-  ```text
-  S ; Γ ⊢ p : T
-  info = S.Structures.get(structName)
-  info ≠ None
-  params = match_structure_type(S, structName, T)
-  params ≠ None
-  index < len(info.fields)
-  A = projection_type(S, Γ, info, index, p, params)
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ Proj(structName, index, p) : A
-  ```
-
-  **Sigma 的特例：** 当 `structName = Sigma`、`T = App(App(Const Sigma, A_val), Bfun_val)` 时：
-  - `params = [A_val, Bfun_val]`
-  - `Proj(Sigma, 0, p) : A_val`（第一字段类型 `Var A` 替换 `A → A_val`，得到 `A_val`）
-  - `Proj(Sigma, 1, p) : App(Bfun_val, Proj(Sigma, 0, p))`（第二字段类型 `App(Var B, Var a)` 替换 `B → Bfun_val`、`a → Proj(Sigma, 0, p)`，得到 `App(Bfun_val, Proj(Sigma, 0, p))`）
-
-  **Prod 的特例：** 当 `structName = Prod`、`T = App(App(Const Prod, A_val), B_val)` 时：
-  - `params = [A_val, B_val]`
-  - `Proj(Prod, 0, p) : A_val`
-  - `Proj(Prod, 1, p) : B_val`（非依值 — 第二字段类型 `Var B` 替换 `B → B_val`，不依赖第一投影）
-
-**评论：**
-
-- HasType 规则与 `infer_type` 实现一致 — 都使用 `match_structure_type` + `projection_type`，不硬编码任何特定结构。
-- 一般规则的三个前提条件：(1) `S.Structures` 中注册了该结构；(2) target 的类型能匹配该结构的参数；(3) index 在合法范围内。这三条对应 `infer_type` 中 `Proj` 分支的三个检查。
-- v6 中的 `CSigma` formation rule、`CPairTyped` introduction rule、`CFst/CSnd` elimination rule 已全部消失 — 被更基础的 `Const/App/Proj` 规则取代。
-
-### 9.4 `Ann` 规则
-
-`Ann` 不再是 CoreTerm 的构造子（从 v6 开始）。类型标注在表层由 `SAnn` 处理，elaboration 时被消耗。详见 §15a.6。
-
-### 9.5 `Conversion` 规则
-
-- **Conversion 规则**（类型转换）
-
-  注意：`defeq` 在 §13 定义。此处是前向引用 — HasType 规则的形式化表述需要 `defeq`，但 `defeq` 的定义在后面。这是不可避免的：`defeq` 依赖 `whnf`（§12），而 HasType 规则需要在 `whnf` 之前给出（因为 §9 是 typing 规则的基础）。
-
-  若：
-
-  ```text
-  S ; Γ ⊢ t : A
-  S ; Γ ⊢ B : Sort u
-  defeq(S, Γ, A, B) = True
-  ```
-
-  则：
-
-  ```text
-  S ; Γ ⊢ t : B
-  ```
+**评论：** `Sigma` 不是模型宇宙里自动存在的魔法对象。v9 中 `Sigma` 的类型签名和 StructureInfo 由 `exec(StructureCmd Sigma Sigma.mk ...)` 自动生成 — 不再预置。这类似于 Lean 的 prelude，但 prelude 中的结构声明在 v9 中由 StructureCmd 显式执行，而非隐式硬编码。
 
 ---
-## 10. `FV`
+## 11. FV 与 substitution
 
-定义函数：
+FV（自由变量）和 substitution（替换）是 CoreTerm 上的两个基本操作，合称 term 的"变量基础设施"。
+
+- **FV(t)**：收集 term `t` 中所有未被 binder 绑定的变量名。例如 `FV(Lam(x, A, Var x)) = FV(A)`，因为 `x` 被 `Lam` 的 binder 绑定，从自由变量集中移除。
+- **subst(t, x, e)**：把 `t` 中自由出现的变量 `x` 全部替换为 `e`。例如 `subst(Var x, x, Const zero) = Const zero`。
+
+两者紧密关联：subst 的 binder 分支（Lam、Forall）需要调用 FV 来判断是否需要 alpha-rename 以避免**变量捕获**。具体来说，当替换 `subst(Lam(y, A, body), x, e)` 且 `y ≠ x` 时，如果 `y` 出现在 `FV(e)` 中（即替换项 `e` 包含一个与 binder 同名的自由变量），直接替换会使得 `e` 中原本自由的 `y` 被 binder `y`"捕获"，改变其语义。此时必须先把 binder 改名为一个新名字，再进行替换。
+
+### 11.1 `FV`
+
+计算 CoreTerm 的自由变量集合。
 
 ```python
 # 写作 FV(t)
@@ -1534,7 +1427,7 @@ def FV(t : CoreTerm) -> Set[LocalName]:
 
 **评论：** v7 只有 7 个构造子，只有 `Lam` 和 `Forall` 有 binder — FV 的定义极为简洁。`Proj` 的 FV 就是其 `target` 的 FV，`structName` 和 `index` 不贡献自由变量。v6 中 `CSigma`（binder）、`CPairTyped`（binder + 四个子 term）、`CFst`/`CSnd` 各需要一个分支，在 v7 中全部消失。
 
-### 10.1 例子
+### 11.2 例子（FV）
 
 ```text
 FV(Const Nat) = ∅
@@ -1547,9 +1440,9 @@ FV(Proj(Sigma, 1, App(Const f, Var y))) = {y}
 ```
 
 ---
-## 11. substitution
+### 11.3 substitution
 
-定义函数：
+替换 term 中某个自由变量的所有出现。
 
 ```python
 # 写作 subst(t, x, e)
@@ -1666,7 +1559,7 @@ def alpha_rename_binder(t : CoreTerm, old : LocalName, new : LocalName) -> CoreT
 
 当前阶段，这两个辅助函数可以先当作底层已实现。
 
-### 11.1 例子
+### 11.4 例子（substitution）
 
 ```text
 subst(Var x, x, Const Nat) = Const Nat
@@ -1704,6 +1597,112 @@ subst(Proj(Sigma, 1, App(Const f, Var y)), y, Const zero)
 = Proj(Sigma, 1, App(Const f, Const zero))
 ```
 
+
+
+### 11.5 `subst_simul`（simultaneous substitution）           【v10 新增】
+
+```python
+# 写作 subst_simul(t, [(x1,e1), ..., (xn,en)])
+def subst_simul(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) -> CoreTerm:
+    '''
+    Simultaneous substitution：一次性替换多个变量，避免逐个替换时
+    后面的替换项干扰前面的替换结果。
+
+    关键语义：subst_simul(Lam(y, A, Var x), [(x, Var y), (y, Const zero)])
+    = Lam(z, A, Var y)  — x 被替换为 Var y，但此 Var y 不会被二次替换为 Const zero
+    （因为替换是同时发生的，替换项 Var y 中的 y 不参与本次替换）。
+
+    要求 substitutions 中的变量名互不相同。
+    '''
+
+    names = [name for name, replacement in substitutions]
+    if len(set(names)) != len(names):
+        raise Error
+
+    if isinstance(t, Const) or isinstance(t, Sort):
+        return t
+
+    if isinstance(t, Var):
+        x = t.args
+        for name, replacement in substitutions:
+            if x == name:
+                return replacement
+        return t
+
+    if isinstance(t, App):
+        f, a = t.args
+        return App(
+            subst_simul(f, substitutions),
+            subst_simul(a, substitutions)
+        )
+
+    if isinstance(t, Proj):
+        structName, index, target = t.args
+        return Proj(
+            structName,
+            index,
+            subst_simul(target, substitutions)
+        )
+
+    if isinstance(t, Lam):
+        y, A, body = t.args
+        A1 = subst_simul(A, substitutions)  # y 的作用域不包含 A
+        body_substitutions = [
+            Pair(name, replacement)
+            for name, replacement in substitutions
+            if name != y
+        ]
+
+        replacement_fv = ⋃ {
+            FV(replacement)
+            for name, replacement in body_substitutions
+        }
+        if y in replacement_fv:
+            used = (
+                FV(body)
+                ∪ replacement_fv
+                ∪ {name for name, replacement in body_substitutions}
+                ∪ {y}
+            )
+            z = fresh_local_name(used)
+            body = alpha_rename_binder(body, y, z)
+            y = z
+
+        return Lam(y, A1, subst_simul(body, body_substitutions))
+
+    if isinstance(t, Forall):
+        y, A, B = t.args
+        A1 = subst_simul(A, substitutions)  # y 的作用域不包含 A
+        body_substitutions = [
+            Pair(name, replacement)
+            for name, replacement in substitutions
+            if name != y
+        ]
+
+        replacement_fv = ⋃ {
+            FV(replacement)
+            for name, replacement in body_substitutions
+        }
+        if y in replacement_fv:
+            used = (
+                FV(B)
+                ∪ replacement_fv
+                ∪ {name for name, replacement in body_substitutions}
+                ∪ {y}
+            )
+            z = fresh_local_name(used)
+            B = alpha_rename_binder(B, y, z)
+            y = z
+
+        return Forall(y, A1, subst_simul(B, body_substitutions))
+
+    raise Error
+```
+
+其中 `⋃` 表示对有限集合族取并集。
+
+**评论：** schema 变量名互不重复，并不足以保证逐个替换总是正确：实际参数或 `Proj(...)` 的 target 仍可能含有与其他 schema 变量同名的自由局部变量。`subst_simul` 确保每个变量只根据原 term 的结构替换一次，替换项本身不参与本轮替换。这是 `projection_type`（§13.3）正确性的保证。
+
 ---
 ## 12. 计算规则：`whnf`
 
@@ -1717,9 +1716,7 @@ whnf(S, t) -> CoreTerm
 
 **评论：** 为什么不直接加入完整的 normalization 或 definitional equality？因为 definitional equality 依赖 whnf — `defeq(S, Γ, A, B)` 的标准实现是把 A 和 B 都 whnf 后比较头部，再递归比较子项。所以 whnf 是 conversion 的基础构件，先加它是最自然的顺序。
 
-### whnf 的核心直觉
-
-一句话：**从外往里，一层一层剥**。
+**whnf 的核心直觉：** 一句话：**从外往里，一层一层剥**。
 
 ```
 whnf(S, Proj(Sigma, 0, App(App(App(App(Const Sigma.mk, A), Bfun), a), b)))
@@ -1923,122 +1920,13 @@ def whnf(S : State, t : CoreTerm) -> CoreTerm:
 
 ---
 
-## 12a. 辅助函数（结构投影层面）
+## 13. 辅助函数（结构投影层面）
 
-本节定义结构投影层面的辅助函数，它们依赖 `subst`（§11）、`whnf`（§12）、`State`（§5）、`StructureInfo`（§5）等后定义的概念。因此放在 §12 之后，而不是 §4a 中（§4a 的函数只依赖 CoreTerm）。
+本节定义结构投影层面的通用辅助函数。它们对任何在 `S.Structures` 中注册的结构都适用，是 `infer_type` Proj 分支和 `HasType` Proj 规则的基础设施。Sigma 专用的辅助函数（`is_sigma_type`、`mk_sigma_type`、`mk_sigma_mk`）放在 §15 内，因为它们仅供 `elab` 的 Sigma 专属分支使用。
 
-### 12a.0 `FV_range`
+### 13.1 `match_structure_type`
 
-```python
-# 写作 FV_range(sigma)
-def FV_range(sigma : PartialMap[LocalName, CoreTerm]) -> Set[LocalName]:
-    '''
-    返回 sigma 中所有 replacement term 的自由变量的并集。
-    '''
-    result = set()
-    for x in dom(sigma):
-        result = result.union(FV(sigma.get(x)))
-    return result
-```
-
-### 12a.1 `subst_simul` — capture-avoiding simultaneous substitution 【v10 修改】
-
-**动机：** 原有的 `subst_many` 是顺序替换——对替换列表中的每对 `(name, replacement)` 依次调用 `subst`。这在 `projection_type` 中可能导致错误：先把 `B` 替换成 `Bfun_val`，再把 `a` 替换成 `Proj(Sigma, 0, target)` 时，可能错误地进入 `Bfun_val` 内部替换其中名为 `a` 的自由变量。这不是预期的行为——应该只替换**原始模板 fieldType** 中的 schema variables，不应递归进入 replacement term。
-
-因此引入 capture-avoiding simultaneous substitution：
-
-```python
-# 写作 subst_simul(t, sigma)
-def subst_simul(t : CoreTerm, sigma : PartialMap[LocalName, CoreTerm]) -> CoreTerm:
-    '''
-    Capture-avoiding simultaneous substitution.
-    只替换 t 原始结构中的自由变量；
-    不继续替换 replacement term 内部的变量。
-    '''
-
-    if isinstance(t, Const):
-        return t
-
-    if isinstance(t, Sort):
-        return t
-
-    if isinstance(t, Var):
-        x = t.args              # t = Var x
-        if x in sigma:
-            return sigma.get(x)
-        return t
-
-    if isinstance(t, App):
-        f, a = t.args
-        return App(
-            subst_simul(f, sigma),
-            subst_simul(a, sigma)
-        )
-
-    if isinstance(t, Proj):
-        structName, index, target = t.args
-        return Proj(
-            structName,
-            index,
-            subst_simul(target, sigma)
-        )
-
-    if isinstance(t, Lam):
-        x, A, body = t.args     # t = Lam(x, A, body)
-
-        A1 = subst_simul(A, sigma)
-
-        # binder x 遮蔽 sigma 中对 x 的替换
-        sigma_body = sigma.remove(x) if x in sigma else sigma
-
-        # 若 x 出现在任何 replacement 的自由变量中，需要 alpha-rename
-        if x in FV_range(sigma_body):
-            z = fresh_local_name(FV(body).union(FV(A)).union(FV_range(sigma_body)).union(dom(sigma_body)).union({x}))
-            body_z = alpha_rename_binder(body, x, z)
-            return Lam(z, A1, subst_simul(body_z, sigma_body))
-
-        return Lam(x, A1, subst_simul(body, sigma_body))
-
-    if isinstance(t, Forall):
-        x, A, B = t.args        # t = Forall(x, A, B)
-
-        A1 = subst_simul(A, sigma)
-
-        sigma_body = sigma.remove(x) if x in sigma else sigma
-
-        if x in FV_range(sigma_body):
-            z = fresh_local_name(FV(B).union(FV(A)).union(FV_range(sigma_body)).union(dom(sigma_body)).union({x}))
-            B_z = alpha_rename_binder(B, x, z)
-            return Forall(z, A1, subst_simul(B_z, sigma_body))
-
-        return Forall(x, A1, subst_simul(B, sigma_body))
-
-    raise Error
-```
-
-**`subst_many` 接口保持不变，内部改用 simultaneous substitution：**
-
-```python
-# 写作 subst_many(t, substitutions)
-def subst_many(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) -> CoreTerm:
-    '''
-    在 t 中同时替换多个自由变量。
-    内部构建 sigma map 后调用 subst_simul。
-    若 substitutions 中有重复名字，raise Error。
-    '''
-    sigma = PartialMap.empty()
-    for name, replacement in substitutions:
-        if name in sigma:
-            raise Error           # 不允许重复名字
-        sigma = sigma.set(name, replacement)
-    return subst_simul(t, sigma)
-```
-
-**评论：** `subst_simul` 是真正的 simultaneous substitution——只替换原始 template 中的自由变量，不递归进入 replacement term。在 `Lam`/`Forall` 中，binder 名字会从 sigma 中移除（shadowing），若 binder 名字出现在 replacement term 的自由变量中则 alpha-rename（capture avoidance）。
-
-`projection_type` 中的替换对象是 structure schema 的变量名（如 `A`、`B`、`a`、`b`）。在 Sigma/Prod 等简单例子中，字段模板主要由 Var 和 App 构成；在一般 StructureCmd 中，字段类型模板也可能包含 Forall 或 Lam。因此 `subst_simul` 必须完整处理所有 CoreTerm 构造子。Simultaneous substitution 保证 replacement term 内部不会被进一步替换。
-
-### 12a.2 `match_structure_type`
+给定一个类型 `T` 和一个结构名 `structName`，判断 `T` 是否是 `(Const structName)` 应用到若干参数上。如果是，返回参数值列表；否则返回 `None`。
 
 ```python
 # 写作 match_structure_type(S, structName, T)
@@ -2060,9 +1948,64 @@ def match_structure_type(S : State, structName : GlobalName, T : CoreTerm) -> Op
     return args
 ```
 
-**评论：** 此函数是 `is_sigma_type`（§4a.1）的一般化。`match_structure_type(S, Sigma, T)` 的结果与 `is_sigma_type(T)` 类似 — 但它能处理任何结构。两者有三个重要区别：(1) `match_structure_type` 内部调用 `whnf`，而 `is_sigma_type` 不调用（需要调用者预先 whnf）；(2) `match_structure_type` 返回所有参数值的列表 `[A_val, Bfun_val]`，而 `is_sigma_type` 返回 `Pair(A_val, Bfun_val)`；(3) `match_structure_type` 检查 `S.Structures` 中是否注册了该结构，而 `is_sigma_type` 不检查。严格相等 `len(args) != len(info.params)` 确保部分应用的结构类型不会被匹配。
+**评论：** 这是结构类型识别的入口。三步检查对应三个前提条件：(1) whnf 后的头部是目标结构名；(2) 该结构已在 `S.Structures` 中注册；(3) 参数数量匹配（`len(args) = len(info.params)`）。严格相等确保部分应用的类型不会被匹配。此函数被 `infer_type` 的 Proj 分支和 `HasType` 的 Proj 规则调用。
 
-### 12a.3 `projection_type`
+**例子：** 假设 Sigma 已注册（`S.Structures.get(Sigma) = info`，其中 `len(info.params) = 2`）：
+
+```text
+match_structure_type(S, Sigma, App(App(Const Sigma, Const Nat), Bfun))
+→ whnf 后 head = Const Sigma, args = [Const Nat, Bfun]
+→ len(args) = 2 = len(info.params)  ✓
+→ 返回 [Const Nat, Bfun]
+
+match_structure_type(S, Sigma, Const Nat)
+→ whnf 后 head = Const Nat ≠ Const Sigma
+→ 返回 None
+
+match_structure_type(S, Sigma, App(Const Sigma, Const Nat))
+→ whnf 后 head = Const Sigma, args = [Const Nat]
+→ len(args) = 1 ≠ 2 = len(info.params)
+→ 返回 None
+```
+
+第三个例子展示了为什么需要严格相等：`App(Const Sigma, Const Nat)` 是部分应用（缺少 `Bfun` 参数），匹配它会导致后续 `projection_type` 替换时参数值数量不足。
+
+### 13.2 `subst_many`                                            【v10 修改】
+
+对单个 term 同时执行多个替换。这是 `projection_type` 的替换引擎——将 schema 模板中的参数名和前序字段名替换为实际值。
+
+```python
+# 写作 subst_many(t, [(x1,e1), ..., (xn,en)])
+def subst_many(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) -> CoreTerm:
+    '''
+    在 t 中同时替换多个自由变量。
+    substitutions 是 [(x1, e1), ..., (xn, en)] 列表。
+    替换项本身不参与本轮替换。
+    '''
+    return subst_simul(t, substitutions)
+```
+
+**评论：** v10 中 `subst_many` 改为调用 `subst_simul`（定义在 §11.5），以保证 capture-avoiding simultaneous substitution。替换列表的顺序不影响结果；实际参数或 target 中恰好出现其他 schema 名字时，也不会被二次替换。
+
+**例子：** 对 Sigma 的第二字段类型模板做替换：
+
+```text
+subst_many(App(Var B, Var a), [(A, Const Nat), (B, Bfun), (a, Proj(Sigma, 0, p))])
+
+同时遍历原 term：
+  Var B → Bfun
+  Var a → Proj(Sigma, 0, p)
+
+替换项 Bfun 和 Proj(Sigma, 0, p) 本身不再接受本轮替换。
+
+最终结果: App(Bfun, Proj(Sigma, 0, p))
+```
+
+`A` 不出现在原 term 中，所以对应替换没有效果。由于这是 simultaneous substitution，参数替换与字段替换在列表中的先后顺序不影响结果。
+
+### 13.3 `projection_type`
+
+已知 `target` 的类型是 `(Const structName) params[0] ... params[n-1]`，计算 `Proj(structName, index, target)` 的类型。核心操作是：取出 `FieldInfo.type` 模板，把其中的参数名替换为实际参数值，把前序字段名替换为对应的 `Proj`。
 
 ```python
 # 写作 projection_type(S, Γ, info, index, target, params)
@@ -2075,12 +2018,10 @@ def projection_type(S : State, Γ : Context, info : StructureInfo, index : Nat, 
     '''
     if index >= len(info.fields):
         raise Error
-    if len(params) != len(info.params):
-        raise Error
     fieldType = info.fields[index].type
 
-    # Build substitution: param names → param values, then prior field names → Proj
-    # 注意顺序：先替换参数名，再替换前序字段名。因为字段模板可能引用参数名（如 App(Var B, Var a) 中的 B）。
+    # Build one simultaneous substitution:
+    # param names → param values, prior field names → Proj
     substitutions = []
     for i, param in enumerate(info.params):
         substitutions.append(Pair(param.name, params[i]))
@@ -2090,12 +2031,148 @@ def projection_type(S : State, Γ : Context, info : StructureInfo, index : Nat, 
     return subst_many(fieldType, substitutions)
 ```
 
-**评论：** 字段类型是模板，使用 `Var` 引用参数名和前序字段名。`projection_type` 把每个参数名替换为实际的参数值，把每个前序字段名替换为对应的投影。结果是一个合法的 CoreTerm，不再包含 schema 变量。
+**评论：** 字段类型是 schema 模板（用 `Var` 引用参数名和前序字段名）。替换后得到一个不再含 schema 变量的合法 CoreTerm。注意替换结果中可能包含 `Proj(...)` 形式（如 Sigma 第二字段类型中的 `Proj(Sigma, 0, target)`）——这些由 `defeq` 在类型比较时通过 `whnf` 化简。`match_structure_type` + `projection_type` 的组合是对任何结构都适用的通用机制，构成 `infer_type` Proj 分支的核心。
 
-**评论（替换顺序）：** 替换列表先放参数名（如 A → A_val, B → Bfun_val），再放前序字段名（如 a → Proj(Sigma, 0, target)）。这个顺序不影响结果（因为 schema 变量互不依赖），但逻辑上更清晰 — 先处理"来自类型的参数"，再处理"来自前序字段的投影"。
+**例子：** 以下演示 `projection_type` 对 Sigma 的字段 0 和字段 1 的完整计算过程。
+
+**前置状态 S**（与 §16 一致，已执行 StructureCmd Sigma + Prod，并声明了 Nat、zero、Pred、choosePred 四个 axiom）：
+
+```text
+S.Axioms = {
+  Sigma      : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0,
+  Sigma.mk   : Π (A : Sort 0), Π (B : Π (x : A), Sort 0),
+                 Π (a : A), Π (b : B a), Sigma A B,
+  Prod       : Π (A : Sort 0), Π (B : Sort 0), Sort 0,
+  Prod.mk    : Π (A : Sort 0), Π (B : Sort 0),
+                 Π (a : A), Π (b : B), Prod A B,
+  Nat        : Sort (level 0),
+  zero       : Const Nat,
+  Pred       : Π (x : Const Nat), Sort (level 0),
+  choosePred : Π (x : Const Nat), App (Const Pred, Var x)
+}
+
+S.Defs = {}
+
+S.Structures = {
+  Sigma : StructureInfo(
+    typeName    = Sigma,
+    constructor = Sigma.mk,
+    params = [
+      ParamInfo(A, Sort(level 0)),
+      ParamInfo(B, Π (x : Var A), Sort(level 0))
+    ],
+    fields = [
+      FieldInfo(a, Var A),
+      FieldInfo(b, App(Var B, Var a))
+    ]
+  ),
+  Prod : StructureInfo(
+    typeName    = Prod,
+    constructor = Prod.mk,
+    params = [
+      ParamInfo(A, Sort(level 0)),
+      ParamInfo(B, Sort(level 0))
+    ],
+    fields = [
+      FieldInfo(a, Var A),
+      FieldInfo(b, Var B)
+    ]
+  )
+}
+
+S.Projections = {
+  Sigma.a : ProjectionInfo(Sigma.a, Sigma, 0),
+  Sigma.b : ProjectionInfo(Sigma.b, Sigma, 1),
+  Prod.a  : ProjectionInfo(Prod.a, Prod, 0),
+  Prod.b  : ProjectionInfo(Prod.b, Prod, 1)
+}
+```
+
+注意 `S.Axioms` 中 `Sigma.mk` 的签名决定了 `infer_type(S, Γ, Const Sigma.mk)` 的结果——它是一个嵌套 Π 类型，四参数应用后返回 `Sigma A B`。下面例子中的 `info` 就是 `S.Structures.get(Sigma)`。
+
+给定一个变量 `p`，假设它的类型是 `Sigma Nat Bfun`，其中 `Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`（写作 `fun (x : Nat) => Pred x`）。通过 `infer_type` 的 Proj 分支（§14.3），先调用 `match_structure_type(S, Sigma, infer_type(S, Γ, p))` 得到参数列表 `[Const Nat, Bfun]`，然后调用 `projection_type` 计算投影类型。下面是两次调用的逐步推导：
+
+**字段 0（非依值）：`Proj(Sigma, 0, p)` 的类型**
+
+```text
+projection_type(S, Γ, info, 0, p, [Const Nat, Bfun])
+
+输入：
+  info   = S.Structures.get(Sigma)  （上述 StructureInfo）
+  index  = 0
+  target = p
+  params = [Const Nat, Bfun]        ← match_structure_type 返回的参数值
+
+步骤 1: 检查 index
+  index = 0 < len(info.fields) = 2  ✓
+
+步骤 2: 取出字段类型模板
+  fieldType = info.fields[0].type = Var A
+
+步骤 3: 构建替换列表
+  参数替换（所有 params 都加入）：
+    i=0: (A, Const Nat)           # params[0] = Const Nat
+    i=1: (B, Bfun)                # params[1] = Bfun
+  前序字段替换（j < index = 0）：无
+  substitutions = [(A, Const Nat), (B, Bfun)]
+
+步骤 4: 执行 simultaneous substitution
+  subst_many(Var A, [(A, Const Nat), (B, Bfun)])
+  → 原 term 的 Var A 直接匹配 (A, Const Nat)
+  → Const Nat
+
+结果: Const Nat
+```
+
+所以 `infer_type(S, Γ, Proj(Sigma, 0, p)) = Const Nat`。
+
+**字段 1（依值）：`Proj(Sigma, 1, p)` 的类型**
+
+```text
+projection_type(S, Γ, info, 1, p, [Const Nat, Bfun])
+
+输入同上，仅 index 不同：index = 1
+
+步骤 1: 检查 index
+  index = 1 < len(info.fields) = 2  ✓
+
+步骤 2: 取出字段类型模板
+  fieldType = info.fields[1].type = App(Var B, Var a)
+
+步骤 3: 构建替换列表
+  参数替换：
+    (A, Const Nat)                  # params[0]
+    (B, Bfun)                       # params[1]
+  前序字段替换（j = 0, j < index = 1）：
+    j=0: (a, Proj(Sigma, 0, p))    # fields[0].name = a
+  substitutions = [(A, Const Nat), (B, Bfun), (a, Proj(Sigma, 0, p))]
+
+步骤 4: 执行 simultaneous substitution
+  subst_many(App(Var B, Var a), [(A, Const Nat), (B, Bfun), (a, Proj(Sigma, 0, p))])
+  → 原 term 的 Var B 直接替换为 Bfun
+  → 原 term 的 Var a 直接替换为 Proj(Sigma, 0, p)
+  → replacement 内部不再接受本轮替换
+
+结果: App(Bfun, Proj(Sigma, 0, p))
+```
+
+所以 `infer_type(S, Γ, Proj(Sigma, 1, p)) = App(Bfun, Proj(Sigma, 0, p))`。
+
+**对比总结：** 字段 0（`Var A`）替换后是纯参数值 `Const Nat`——非依值，结果不含 `Proj`。字段 1（`App(Var B, Var a)`）替换后含 `Proj(Sigma, 0, p)`——依值字段的类型依赖前序投影。这个含 `Proj` 的结果不需在此处化简：当 `p` 是具体的构造子应用（如 `Sigma.mk Nat Bfun zero (choosePred zero)`）时，`whnf` 可将 `Proj(Sigma, 0, p)` 化简为 `zero`，而 `defeq` 在类型比较时会自动调用 `whnf`。对于 Prod（非依值结构），两个字段类型分别为 `Var A` 和 `Var B`，替换后都是纯参数值，不含 `Proj`。
 
 ---
-## 13. 类型等价：`defeq`
+
+## 14. 类型系统
+
+本节将定义相等（defeq）、形式化 typing 规则（HasType）、算法实现（infer_type / check_type）整合为一章，因为它们共同构成模型的类型系统：
+
+- **defeq（§14.1）**：term 的计算性相等——whnf + 递归结构比较。它是 conversion-based type checking 的基础。
+- **HasType（§14.2）**：类型系统声明式规范——以推理规则的形式定义怎样的 term 可以拥有怎样的类型。
+- **infer_type / check_type（§14.3）**：类型系统的算法实现——bidirectional type checker，调用 defeq 做 conversion checking，调用 match_structure_type + projection_type 处理 Proj。
+
+三者的关系：HasType 是"什么是对的"，infer_type/check_type 是"怎么算出来"，defeq 是 infer/check 用来判断类型是否等价的底层机制。
+
+### 14.1 定义相等（defeq）
 
 自 v7 起 `whnf` 让 term 可以计算了。例如：
 
@@ -2131,7 +2208,7 @@ defeq(S, ∅, App(Bfun, Proj(Sigma, 0, p)), App(Bfun, a))
 2. 两边都是 `App`，`defeq` 递归比较函数部分和参数部分。函数部分 `Const Pred` vs `Const Pred` ✓。参数部分 `defeq(S, ∅, Proj(Sigma, 0, p), a)` — **这里 `defeq` 再次调用 whnf**，把 `Proj(Sigma, 0, p)` 化简为 `a`。两边 whnf 后都是 `a` ✓。
 3. 整体 `True`。
 
-### 为什么不能只比较 `whnf`
+#### 为什么不能只比较 `whnf`
 
 不能写成：
 
@@ -2156,7 +2233,7 @@ defeq(S : State, Γ : Context, t1 : CoreTerm, t2 : CoreTerm) -> bool
 2. **头部结构匹配则递归比较子项** — 比如 `App` 就递归比函数和参数
 3. **binder 用 alpha-renaming** — `Forall(x, Nat, x)` 和 `Forall(y, Nat, y)` 应该相等
 
-### 13.1 基本情况（无子项的构造子）
+#### 基本情况（无子项的构造子）
 
 **Sort：** 两边 whnf 后都是 `Sort`，比较 level。
 
@@ -2181,7 +2258,7 @@ if isinstance(t1, Var) and isinstance(t2, Var):
     return t1.args == t2.args    # 比较两个 LocalName
 ```
 
-### 13.2 递归情况（有子项、无 binder 的构造子）
+#### 递归情况（有子项、无 binder 的构造子）
 
 **App：** 递归比较函数部分和参数部分。
 
@@ -2203,7 +2280,7 @@ if isinstance(t1, Proj) and isinstance(t2, Proj):
 
 **评论：** v6 中这里需要 `CFst` 和 `CSnd` 两个分支。v7 用一个 `Proj` 分支取代了两个，并且 `Proj` 还需要比较 `structName` 和 `index`（确保是同一个结构的同一个字段）。
 
-### 13.3 Binder 情况（Lam / Forall）
+#### Binder 情况（Lam / Forall）
 
 Binder 的处理需要 alpha-renaming。以 `Forall` 为例：
 
@@ -2245,11 +2322,11 @@ if isinstance(t1, Lam) and isinstance(t2, Lam):
 
 **评论：** v6 中这里还需要 `CSigma`（同 `CForall`）和 `CPairTyped`（五个字段比较 + binder）的分支。v7 中 `CSigma` 和 `CPairTyped` 不存在 — Sigma 类型是 `App(App(Const Sigma, A), Bfun)`，它的 defeq 由 `App` 分支的递归比较自动处理。
 
-### 13.4 其他情况
+#### 其他情况
 
 如果两边 whnf 后的头部构造子不同（比如一边是 `App`，另一边是 `Sort`），返回 `False`。
 
-### 13.5 `defeq` 完整代码
+#### `defeq` 完整代码
 
 ```python
 # 写作 defeq(S, Γ, t1, t2)
@@ -2318,9 +2395,186 @@ def defeq(S : State, Γ : Context, t1 : CoreTerm, t2 : CoreTerm) -> bool:
 - `App` 分支递归比较两边，这意味着 `App(App(Const Sigma, A1), B1)` 和 `App(App(Const Sigma, A2), B2)` 的比较会递归进入 `Const Sigma` vs `Const Sigma`（显然相等）、`A1` vs `A2`、`B1` vs `B2`。这自动处理了 Sigma 类型的 defeq — 不需要专门的 `CSigma` 分支。
 
 ---
-## 14. `infer_type` 与 `check_type`
+### 14.2 形式化 Typing 规则（HasType）
 
-### 14.0 背景：为什么需要两个函数？
+`HasType` 是 `State × Context × CoreTerm × CoreTerm` 的最小子集，满足以下规则。
+
+核心设计：**Sigma 类型的 formation、pair 的 introduction、fst/snd 的 elimination 不再需要专门的 HasType 规则。** 它们由基础的 `Const` 和 `App` 规则覆盖 — 因为 Sigma 现在是 `Const Sigma`，pair 是 `(Const Sigma.mk) A B a b`，它们的类型通过普通函数应用规则计算。
+
+唯一新增的规则是 `Proj` 的 elimination rule。
+
+#### 基本 typing 规则
+
+- **Var 规则**
+
+  若：
+
+  ```text
+  Γ.Types.get(x) = A
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Var x : A
+  ```
+
+- **Const-axiom 规则**
+
+  若：
+
+  ```text
+  S.Axioms.get(n) = A
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Const n : A
+  ```
+
+- **Const-def 规则**
+
+  若：
+
+  ```text
+  S.Defs.get(n) = Pair(A, t)
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Const n : A
+  ```
+
+#### `Sort / Π / fun / App` 规则
+
+- **Sort 规则**
+
+  若：
+
+  ```text
+  v = succ_level(u)
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Sort u : Sort v
+  ```
+
+- **Forall 规则**
+
+  若：
+
+  ```text
+  S ; Γ ⊢ A : Sort u
+  S ; (Γ, x : A) ⊢ B : Sort v
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Forall(x, A, B) : Sort (max_level(u, v))
+  ```
+
+- **Lam 规则**
+
+  若：
+
+  ```text
+  S ; Γ ⊢ A : Sort u
+  S ; (Γ, x : A) ⊢ t : B
+  S ; (Γ, x : A) ⊢ B : Sort v
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Lam(x, A, t) : Forall(x, A, B)
+  ```
+
+- **App 规则**
+
+  若：
+
+  ```text
+  S ; Γ ⊢ f : Forall(x, A, B)
+  S ; Γ ⊢ a : A
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ App(f, a) : B[x := a]
+  ```
+
+#### `Proj` 规则
+
+- **Proj 规则**（一般投影 elimination rule）
+
+  若：
+
+  ```text
+  S ; Γ ⊢ p : T
+  info = S.Structures.get(structName)
+  info ≠ None
+  params = match_structure_type(S, structName, T)
+  params ≠ None
+  index < len(info.fields)
+  A = projection_type(S, Γ, info, index, p, params)
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ Proj(structName, index, p) : A
+  ```
+
+  **Sigma 的特例：** 当 `structName = Sigma`、`T = App(App(Const Sigma, A_val), Bfun_val)` 时：
+  - `params = [A_val, Bfun_val]`
+  - `Proj(Sigma, 0, p) : A_val`（第一字段类型 `Var A` 替换 `A → A_val`，得到 `A_val`）
+  - `Proj(Sigma, 1, p) : App(Bfun_val, Proj(Sigma, 0, p))`（第二字段类型 `App(Var B, Var a)` 替换 `B → Bfun_val`、`a → Proj(Sigma, 0, p)`，得到 `App(Bfun_val, Proj(Sigma, 0, p))`）
+
+  **Prod 的特例：** 当 `structName = Prod`、`T = App(App(Const Prod, A_val), B_val)` 时：
+  - `params = [A_val, B_val]`
+  - `Proj(Prod, 0, p) : A_val`
+  - `Proj(Prod, 1, p) : B_val`（非依值 — 第二字段类型 `Var B` 替换 `B → B_val`，不依赖第一投影）
+
+**评论：**
+
+- HasType 规则与 `infer_type` 实现一致 — 都使用 `match_structure_type` + `projection_type`，不硬编码任何特定结构。
+- 一般规则的三个前提条件：(1) `S.Structures` 中注册了该结构；(2) target 的类型能匹配该结构的参数；(3) index 在合法范围内。这三条对应 `infer_type` 中 `Proj` 分支的三个检查。
+- v6 中的 `CSigma` formation rule、`CPairTyped` introduction rule、`CFst/CSnd` elimination rule 已全部消失 — 被更基础的 `Const/App/Proj` 规则取代。
+
+#### `Ann` 规则
+
+`Ann` 不再是 CoreTerm 的构造子（从 v6 开始）。类型标注在表层由 `SAnn` 处理，elaboration 时被消耗。详见 §15.6。
+
+#### `Conversion` 规则
+
+- **Conversion 规则**（类型转换）
+
+  注意：`defeq` 已在 §14.1 定义，不再构成前向引用。HasType 规则的所有依赖（`whnf`、`match_structure_type`、`projection_type`、`defeq`）均在 §12-§14.1 已定义。
+
+  若：
+
+  ```text
+  S ; Γ ⊢ t : A
+  S ; Γ ⊢ B : Sort u
+  defeq(S, Γ, A, B) = True
+  ```
+
+  则：
+
+  ```text
+  S ; Γ ⊢ t : B
+  ```
+
+---
+### 14.3 算法实现（infer_type / check_type）
+
+#### 背景：为什么需要两个函数？
 
 如果所有 CoreTerm 都能从自身推断类型，那么 `check_type` 只需要是 `infer_type` 的简单包装：
 
@@ -2347,7 +2601,7 @@ infer_type 可以调用 check_type（如 App 中检查参数类型）
 - **Pair introduction**：`App(App(App(App(Const Sigma.mk, A), Bfun), a), b)` 由 App 规则链式处理 — 每次应用推断类型，最终得到 `App(App(Const Sigma, A), Bfun)` 即 Sigma 类型。
 - **Elimination**：`Proj(structName, i, p)` 需要专门的分支来计算字段类型 — 通过 `match_structure_type` + `projection_type` 实现，对任何在 `S.Structures` 中注册的结构都适用。
 
-### 14.1 `infer_type` 的定义
+#### `infer_type` 的定义
 
 ```text
 infer_type(S : State, Γ : Context, t : CoreTerm) -> CoreTerm
@@ -2366,7 +2620,7 @@ infer_type(S, Γ, t)
 - 若 `t` 在 `S` 和 `Γ` 下可推断类型，则返回它的类型
 - 若不可推断，则 `infer_type(S, Γ, t)` 不定义（代码中写作 `raise Error`）
 
-### 14.2 `check_type` 的定义
+#### `check_type` 的定义
 
 ```text
 check_type(S : State, Γ : Context, t : CoreTerm, A : CoreTerm) -> bool
@@ -2386,7 +2640,7 @@ check_type(S, Γ, t, A)
 - 若 `t` 在 `S` 和 `Γ` 下可以拥有类型 `A`，则返回 `True`
 - 否则返回 `False`
 
-### 14.3 代码
+#### 代码
 
 ```python
 # 写作 infer_type(S, Γ, t)
@@ -2521,7 +2775,7 @@ def check_type(S: State, Γ: Context, t: CoreTerm, A: CoreTerm) -> bool:
 - **Sigma formation 的类型推断路径：**
   1. `infer_type(S, Γ, Const Sigma)` → 从 `S.Axioms` 查到 Sigma 的类型（一个 Π 类型）。
   2. `infer_type(S, Γ, App(Const Sigma, A))` → App 规则：`Const Sigma` 的类型是 `Forall(_, Sort u, ...)`，检查 `A : Sort u`，返回替换后的类型。
-  3. `infer_type(S, Γ, App(App(Const Sigma, A), Bfun))` → 继续 App 规则链，最终得到 Sigma 的结果类型。在当前单宇宙模型中，`Sigma A Bfun` 的类型由 `Const Sigma` 的签名推出，结果是 `Sort(level 0)`。更一般的 universe-polymorphic 版本以后再加。
+  3. `infer_type(S, Γ, App(App(Const Sigma, A), Bfun))` → 继续 App 规则链，最终得到 Sigma 的结果类型。在当前单宇宙 v9 中，`Sigma A Bfun` 的类型由 `Const Sigma` 的签名推出，结果是 `Sort(level 0)`。更一般的 universe-polymorphic 版本以后再加。
   整个过程由 Const + App 规则自动处理，不需要专门的 CSigma 分支。
 
 - **Pair introduction 的类型推断路径：**
@@ -2530,21 +2784,21 @@ def check_type(S: State, Γ: Context, t: CoreTerm, A: CoreTerm) -> bool:
   3. 最终得到 `App(App(Const Sigma, A), Bfun)` 即 Sigma 类型。
   整个过程由 Const + App 规则自动处理，不需要专门的 CPairTyped 分支。
 
-- **Proj 的类型推断** 已一般化。`match_structure_type(S, structName, Ttarget)`（定义在 §12a.2）从目标类型中提取结构参数值，`projection_type(S, Γ, info, index, target, params)`（定义在 §12a.3）用 `FieldInfo.type` 模板计算字段类型。两者对任何在 `S.Structures` 中注册的结构都适用。
+- **Proj 的类型推断** 已一般化。`match_structure_type(S, structName, Ttarget)`（定义在 §13.1）从目标类型中提取结构参数值，`projection_type(S, Γ, info, index, target, params)`（定义在 §13.3）用 `FieldInfo.type` 模板计算字段类型。两者对任何在 `S.Structures` 中注册的结构都适用。
 
 - **一般化机制对 Sigma 的工作方式：** 对于 `Proj(Sigma, 0, p)`：
   1. `match_structure_type(S, Sigma, Ttarget)` 从 `p` 的类型中提取 `[A_val, Bfun_val]`。
   2. `projection_type(S, Γ, info, 0, p, [A_val, Bfun_val])` — `fields[0].type = Var A`，替换 `A → A_val`，得到 `A_val`。
   对于 `Proj(Sigma, 1, p)`：
-  1. 同上提取 `[A_val, Bfun_val]`。
-  2. `projection_type` — `fields[1].type = App(Var B, Var a)`，替换 `A → A_val`、`B → Bfun_val`、`a → Proj(Sigma, 0, p)`，得到 `App(Bfun_val, Proj(Sigma, 0, p))`。
+  3. 同上提取 `[A_val, Bfun_val]`。
+  4. `projection_type` — `fields[1].type = App(Var B, Var a)`，替换 `A → A_val`、`B → Bfun_val`、`a → Proj(Sigma, 0, p)`，得到 `App(Bfun_val, Proj(Sigma, 0, p))`。
 
 - **一般化机制对 Prod 的工作方式：** 对于 `Proj(Prod, 0, p)`：
   1. `match_structure_type(S, Prod, Ttarget)` 从 `p` 的类型中提取 `[A_val, B_val]`。
   2. `projection_type` — `fields[0].type = Var A`，替换 `A → A_val`，得到 `A_val`。
   对于 `Proj(Prod, 1, p)`：
-  1. 同上提取 `[A_val, B_val]`。
-  2. `projection_type` — `fields[1].type = Var B`（非依值！），替换 `A → A_val`、`B → B_val`，得到 `B_val`。
+  3. 同上提取 `[A_val, B_val]`。
+  4. `projection_type` — `fields[1].type = Var B`（非依值！），替换 `A → A_val`、`B → B_val`，得到 `B_val`。
   注意 Prod 的第二字段类型是 `Var B` 而非 `App(Var B, Var a)` — 这个区别完全由 `FieldInfo.type` 模板表达。
 
 - 注意 `projection_type` 返回的类型中可能包含 `Proj(...)` 形式（如 Sigma 的第二字段类型中的 `Proj(Sigma, 0, target)`）— 这是未经化简的项。`whnf` 可以化简它（如果 target 是构造子应用），但 `infer_type` 本身不做化简。`check_type` 通过 `defeq` 在比较时自动调用 `whnf` 来处理这种情况。
@@ -2554,368 +2808,9 @@ def check_type(S: State, Γ: Context, t: CoreTerm, A: CoreTerm) -> bool:
 - `infer_type` 在所有类型头部检查处使用了 `whnf` 展开。具体来说：`Forall`/`Lam` 分支中检查 `TA : Sort` 和 `TB : Sort` 时、`App` 分支中检查 `Tf : Forall` 时、`Proj` 分支中通过 `match_structure_type` 检查 `Ttarget` 是否匹配结构类型时，都先用 `whnf` 展开推断出的类型。
 
 ---
-## 15. 构建前置状态 `S`                                         【v10 修改】
+## 15. `elab`：从 SurfaceTerm 到 CoreTerm                          【v10 修改】
 
-为了后续展示 `elab` / `whnf` / `defeq` / `StructureCmd` / `SProj` / `SDot` 的例子，先构建一个共同的前置状态 `S`。
-
-v10 不预置任何结构。从空初始状态 `S₀`（§5a）开始，先通过 StructureCmd 定义 Sigma 和 Prod，再添加 axiom。StructureCmd 自动为每个字段生成 ProjectionInfo。
-
-```text
-S₁ = exec(S₀, StructureCmd Sigma Sigma.mk
-  params = [A : SSort 0, B : SForall(x, SVar A, SSort 0)]
-  fields = [a : SVar A, b : SApp(SVar B, SVar a)])       （完整推导见 §15b.1）
-
-SΣ = S₁  （缩写）
-
-S₂ = exec(SΣ, StructureCmd Prod Prod.mk
-  params = [A : SSort 0, B : SSort 0]
-  fields = [a : SVar A, b : SVar B])                     （完整推导见 §15b.2）
-
-SΣΠ = S₂  （缩写）
-
-S₃ = exec(SΣΠ, AxiomCmd Nat : SSort (level 0))
-S₄ = exec(S₃, AxiomCmd zero : SConst Nat)
-S₅ = exec(S₄, AxiomCmd Pred : SForall (x, SConst Nat, SSort (level 0)))
-S₆ = exec(S₅, AxiomCmd choosePred : SForall (x, SConst Nat, SApp (SConst Pred, SVar x)))
-
-S = S₆
-```
-
-最终得到的状态 `S`：
-
-```text
-S.Axioms = {
-  Sigma      : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0,
-  Sigma.mk   : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B,
-  Prod       : Π (A : Sort 0), Π (B : Sort 0), Sort 0,
-  Prod.mk    : Π (A : Sort 0), Π (B : Sort 0), Π (a : A), Π (b : B), Prod A B,
-  Nat        : Sort (level 0),
-  zero       : Const Nat,
-  Pred       : Forall (x, Const Nat, Sort (level 0)),
-  choosePred : Forall (x, Const Nat, App (Const Pred, Var x))
-}
-S.Defs = {}
-S.Structures = {
-  Sigma : StructureInfo(Sigma, Sigma.mk, params=[A, B], fields=[(a, Var A), (b, App(Var B, Var a))]),
-  Prod  : StructureInfo(Prod, Prod.mk, params=[A, B], fields=[(a, Var A), (b, Var B)])
-}
-S.Projections = {
-  Sigma.a ↦ ProjectionInfo(Sigma.a, Sigma, 0),
-  Sigma.b ↦ ProjectionInfo(Sigma.b, Sigma, 1),
-  Prod.a  ↦ ProjectionInfo(Prod.a, Prod, 0),
-  Prod.b  ↦ ProjectionInfo(Prod.b, Prod, 1)
-}
-```
-
-四个 axiom 的角色：
-- `Nat`：全局 type
-- `zero`：`Nat` 的全局常量
-- `Pred`：依值 type family — 对每个 `x : Nat`，`Pred x` 是一个 type
-- `choosePred`：依值函数 — 对每个 `x : Nat`，给出 `Pred x` 的一个元素
-
-由这些 axiom 立即可得（任意上下文 `Γ` 下）：
-
-```text
-S ; Γ ⊢ Const Nat        : Sort (level 0)
-S ; Γ ⊢ Const zero       : Const Nat
-S ; Γ ⊢ Const Pred       : Forall (x, Const Nat, Sort (level 0))
-S ; Γ ⊢ Const choosePred : Forall (x, Const Nat, App (Const Pred, Var x))
-S ; Γ ⊢ App (Const Pred, Const zero) : Sort (level 0)
-S ; Γ ⊢ App (Const choosePred, Const zero) : App (Const Pred, Const zero)
-```
-
-**评论：** 后续 §18-§21 的所有例子都基于这个状态 `S`。需要时会在用到的地方临时扩展状态（如 §19.4 加入 `pair0`，§19.6 加入 `Point`）。v10 中 Sigma 和 Prod 都不再预置 — 全部通过 StructureCmd 定义，类型签名、StructureInfo 和 ProjectionInfo 由 exec 自动生成（完整推导见 §15b）。
-
----
-
-## 15b. StructureCmd 例子                                    【v10 修改】
-
-本节展示 `StructureCmd` 的完整执行过程，逐步骤对照 §7.4 中的五步规则。
-
-### 15b.1 StructureCmd Sigma（依值结构）— v10 的核心例子
-
-**输入：**
-
-```text
-cmd = StructureCmd Sigma Sigma.mk
-  params = [ParamDecl(A, SSort(level 0)), ParamDecl(B, SForall(x, SVar A, SSort(level 0)))]
-  fields = [FieldDecl(a, SVar A), FieldDecl(b, SApp(SVar B, SVar a))]
-```
-
-即用户声明：`structure Sigma (A : Sort 0) (B : Π (x : A), Sort 0) where a : A, b : B a`
-
-**执行过程（在空状态 S₀ 中）：**
-
-**第一步：名字检查**
-
-```text
-Sigma ∉ S₀.Axioms     ✓ (S₀ 是空状态)
-Sigma ∉ S₀.Defs       ✓
-Sigma ∉ S₀.Structures ✓
-Sigma.mk ∉ S₀.Axioms  ✓
-Sigma.mk ∉ S₀.Defs    ✓
-Sigma.mk ∉ S₀.Structures ✓
-```
-
-名字无冲突 ✓
-
-**第二步：Telescope 检查**
-
-参数 elaboration：
-
-```text
-Γ0 = ∅
-
-ParamDecl(A, SSort(level 0)):
-  T_A_core = elab(S₀, Γ0, SSort(level 0), None) = Sort(level 0)
-  whnf(S₀, infer_type(S₀, Γ0, Sort(level 0))) = Sort(level 1)    ← 是 Sort ✓
-  Γ1 = Γ0, A : Sort(level 0)
-
-ParamDecl(B, SForall(x, SVar A, SSort(level 0))):
-  T_B_core = elab(S₀, Γ1, SForall(x, SVar A, SSort(level 0)), None)
-```
-
-elab 处理 `SForall(x, SVar A, SSort(level 0))`：
-- A_c = Var A（从 Γ1 查到 A : Sort(level 0)）
-- B_c = Sort(level 0)
-- 结果 = `Forall(x, Var A, Sort(level 0))`（写作 `Π (x : A), Sort 0`）
-
-```text
-  T_B_core = Π (x : Var A), Sort (level 0)
-  whnf(S₀, infer_type(S₀, Γ1, Π (x : Var A), Sort (level 0))) = Sort(level 1)    ← 是 Sort ✓
-  Γ2 = Γ1, B : Π (x : Var A), Sort (level 0)
-```
-
-注意：B 的值是一个返回 Sort 0 的 type family；但 B 的类型 `Π (x : A), Sort 0` 本身生活在 Sort 1（由 Forall 规则：`Π (x : A), Sort 0 : Sort(max(0, 1)) = Sort 1`）。Telescope 检查只要求参数类型是某个 Sort，因此通过。
-
-这里 elab 不需要 Sigma 已存在于状态中 — `SForall` 是基本 SurfaceTerm 构造子，不是 `SSigma`。
-
-字段 elaboration（在 Γ2 中）：
-
-```text
-FieldDecl(a, SVar A):
-  F_a_core = elab(S₀, Γ2, SVar A, None) = Var A
-  whnf(S₀, infer_type(S₀, Γ2, Var A)) = Sort(level 0)           ← 是 Sort ✓
-  Γ3 = Γ2, a : Var A
-
-FieldDecl(b, SApp(SVar B, SVar a)):
-  F_b_core = elab(S₀, Γ3, SApp(SVar B, SVar a), None)
-```
-
-elab 处理 `SApp(SVar B, SVar a)`：
-- f_c = Var B（从 Γ3 查到 B : Π (x : Var A), Sort(level 0)）
-- Tf = Π (x : Var A), Sort(level 0)，expected arg type = Var A
-- a_c = Var a（从 Γ3 查到 a : Var A）
-- check_type(S₀, Γ3, Var a, Var A) ✓
-- 结果 = `App(Var B, Var a)`（写作 `B a`）
-
-```text
-  F_b_core = App(Var B, Var a)
-  whnf(S₀, infer_type(S₀, Γ3, App(Var B, Var a))) = Sort(level 0)    ← 是 Sort ✓
-```
-
-所有类型都是 Sort ✓。Sigma 的参数 B 是依值类型（Π 类型），字段 b 的类型也依赖前序字段 a — 这展示了 StructureCmd 对依值结构的处理能力。
-
-**第三步：类型生成**
-
-```text
-info = StructureInfo(
-  typeName    = Sigma,
-  constructor = Sigma.mk,
-  params = [ParamInfo(A, Sort(level 0)), ParamInfo(B, Π (x : Var A), Sort(level 0))],
-  fields = [FieldInfo(a, Var A), FieldInfo(b, App(Var B, Var a))]
-)
-
-type_type = make_structure_type(info)
-```
-
-`make_structure_type` 按当前模型的单宇宙简化规则，直接把结构结果类型固定为 `Sort(level 0)`（不计算 result_level）：
-
-- telescope = `[(A, Sort(level 0)), (B, Π (x : Var A), Sort(level 0))]`
-- 结果 = `make_forall_chain([(A, Sort(level 0)), (B, Π (x : Var A), Sort(level 0))], Sort(level 0))`
-- = `Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0`
-
-即 **Sigma : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0** ✓
-
-```text
-constructor_type = make_constructor_type(info)
-```
-
-`make_constructor_type` 的计算：
-
-- telescope = `[(A, Sort(level 0)), (B, Π (x : Var A), Sort(level 0)), (a, Var A), (b, App(Var B, Var a))]`
-- body = `make_type_app(Sigma, [A, B])` = `(Const Sigma) (Var A) (Var B)`
-- 结果 = `Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B`
-
-即 **Sigma.mk : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B** ✓
-
-**第四步：ProjectionInfo 生成**（v10 新增）
-
-投影名自动生成规则：`qualified_name(typeName, fieldName)`。当前模型中 Sigma 的字段名是 `a` 和 `b`（§5a.2），所以投影名是 `Sigma.a` 和 `Sigma.b`（不是 Lean 的 `Sigma.fst` 和 `Sigma.snd` — 因为 Lean 中 Sigma 的字段名是 `fst` 和 `snd`）。
-
-```text
-ProjectionInfo(Sigma.a, Sigma, 0)    # 字段 a → 投影名 Sigma.a
-ProjectionInfo(Sigma.b, Sigma, 1)    # 字段 b → 投影名 Sigma.b
-```
-
-**第五步：状态更新**
-
-```text
-SΣ = State(
-    Axioms     = S₀.Axioms.set(Sigma, Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0)
-                   .set(Sigma.mk, Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B),
-    Defs       = S₀.Defs,
-    Structures = S₀.Structures.set(Sigma, StructureInfo(...)),
-    Projections = S₀.Projections.set(Sigma.a, ProjectionInfo(Sigma.a, Sigma, 0))
-                    .set(Sigma.b, ProjectionInfo(Sigma.b, Sigma, 1))
-)
-```
-
-**验证：** 执行后：
-- `Const Sigma` 的类型可以通过 `infer_type` 推断 ✓
-- `Const Sigma.mk` 的类型可以通过 `infer_type` 推断 ✓
-- `Proj(Sigma, 0, ...)` 和 `Proj(Sigma, 1, ...)` 的类型推断和 whnf 化简都可以工作 ✓
-- elab 的 `SSigma`/`SPair`/`SFst`/`SSnd` 分支现在可以工作 — 因为 Sigma 和 Sigma.mk 已在 S.Axioms 中，Sigma 已在 S.Structures 中 ✓
-- elab 的 `SProj(Sigma.a, p)` 和 `SDot(p, a)` 分支现在可以工作 — 因为 `Sigma.a` 已在 S.Projections 中 ✓
-
-**评论：** 这是 v10 的核心进展 — Sigma 的字段现在有了投影名 `Sigma.a` 和 `Sigma.b`。用户可以写 `SProj(Sigma.a, p)` 或 `SDot(p, a)` 来访问 Sigma 的字段，elaboration 后变成 `Proj(Sigma, 0, p_core)` 和 `Proj(Sigma, 1, p_core)`。SFst/SSnd 是 Sigma 的专属 surface 语法，SProj/SDot 是通用的投影语法 — 适用于所有通过 StructureCmd 声明的结构。
-
-### 15b.2 StructureCmd Prod（非依值结构）
-
-**输入：**
-
-```text
-cmd = StructureCmd Prod Prod.mk
-  params = [ParamDecl(A, SSort(level 0)), ParamDecl(B, SSort(level 0))]
-  fields = [FieldDecl(a, SVar A), FieldDecl(b, SVar B)]
-```
-
-即用户声明：`structure Prod (A : Sort 0) (B : Sort 0) where a : A, b : B`
-
-**执行过程（在 SΣ 中）：**
-
-**第一步：名字检查** — Prod 和 Prod.mk 不在 SΣ 中 ✓
-
-**第二步：Telescope 检查**
-
-```text
-Γ0 = ∅
-
-ParamDecl(A, SSort(level 0)):
-  T_A_core = Sort(level 0)
-  type = Sort(level 1) ✓
-  Γ1 = Γ0, A : Sort(level 0)
-
-ParamDecl(B, SSort(level 0)):
-  T_B_core = Sort(level 0)
-  type = Sort(level 1) ✓
-  Γ2 = Γ1, B : Sort(level 0)
-
-FieldDecl(a, SVar A):
-  F_a_core = Var A
-  type = Sort(level 0) ✓  (在 Γ2 中 Var A : Sort(level 0))
-  Γ3 = Γ2, a : Var A
-
-FieldDecl(b, SVar B):
-  F_b_core = Var B
-  type = Sort(level 0) ✓  (在 Γ3 中 Var B : Sort(level 0))
-```
-
-**第三步：类型生成**
-
-```text
-info = StructureInfo(
-  typeName    = Prod,
-  constructor = Prod.mk,
-  params = [ParamInfo(A, Sort(level 0)), ParamInfo(B, Sort(level 0))],
-  fields = [FieldInfo(a, Var A), FieldInfo(b, Var B)]
-)
-```
-
-`make_structure_type`：
-
-- telescope = `[(A, Sort(level 0)), (B, Sort(level 0))]`
-- 结果 = `Π (A : Sort 0), Π (B : Sort 0), Sort 0`
-
-即 **Prod : Π (A : Sort 0), Π (B : Sort 0), Sort 0**
-
-`make_constructor_type`：
-
-- telescope = `[(A, Sort(level 0)), (B, Sort(level 0)), (a, Var A), (b, Var B)]`
-- body = `make_type_app(Prod, [A, B])` = `(Const Prod) (Var A) (Var B)`
-- 结果 = `Π (A : Sort 0), Π (B : Sort 0), Π (a : A), Π (b : B), Prod A B`
-
-即 **Prod.mk : Π (A : Sort 0), Π (B : Sort 0), Π (a : A), Π (b : B), Prod A B**
-
-**对比：** 这与早期版本中预置的 Prod 和 Prod.mk 类型完全相同。StructureInfo 的 params/fields 也完全相同。这验证了 StructureCmd 可以替代预置方式 — 当前模型中 Prod 通过 StructureCmd 定义，不再预置。
-
-**评论：** Prod 的第二字段类型是 `Var B`（非依值），与 Sigma 的 `App(Var B, Var a)`（依值）形成对比。这个区别完全由 `FieldInfo.type` 模板表达，StructureCmd 的机制不需要区分。
-
-**第四步：ProjectionInfo 生成**（v10 新增）
-
-```text
-Prod.a ↦ ProjectionInfo(Prod.a, Prod, 0)    # 字段 a → 投影名 Prod.a
-Prod.b ↦ ProjectionInfo(Prod.b, Prod, 1)    # 字段 b → 投影名 Prod.b
-```
-
-**第五步：状态更新**（略 — 与 Sigma 类似，Axioms 加两个、Structures 加一个、Projections 加两个）
-
-### 15b.3 StructureCmd Point
-
-在状态 `S` 的基础上执行：
-
-```text
-S' = exec(S, StructureCmd Point Point.mk
-  params = [ParamDecl(X, SSort(level 0))]
-  fields = [FieldDecl(x, SVar X), FieldDecl(y, SVar X)])
-```
-
-推导与 §15b.1 类似但更简单（1 个参数、2 个字段，无依值关系）。生成的类型：
-
-```text
-Point    : Π (X : Sort 0), Sort 0
-Point.mk : Π (X : Sort 0), Π (x : X), Π (y : X), Point X
-```
-
-生成的 ProjectionInfo：
-
-```text
-Point.x ↦ ProjectionInfo(Point.x, Point, 0)    # 字段 x → 投影名 Point.x
-Point.y ↦ ProjectionInfo(Point.y, Point, 1)    # 字段 y → 投影名 Point.y
-```
-
-elab 例子见 §21.5 和 §21.6。whnf 和 defeq 例子见 §19.6 和 §20.5。
-
-### 15b.4 StructureCmd UnitLike（无参数）
-
-该例子应在已经包含 `Nat : Sort 0` 的状态中执行（例如 §15 构造出的状态 S），因为 `SConst Nat` 的 elaboration 需要 `Nat` 已存在于 `S.Axioms` 中。
-
-```text
-cmd = StructureCmd UnitLike UnitLike.mk
-  params = []
-  fields = [FieldDecl(star, SConst Nat)]
-```
-
-生成的类型：
-
-```text
-UnitLike    : Sort 0                   （无参数，type constructor 类型是裸 Sort）
-UnitLike.mk : Π (star : Nat), UnitLike
-```
-
-生成的 ProjectionInfo：
-
-```text
-UnitLike.star ↦ ProjectionInfo(UnitLike.star, UnitLike, 0)    # 字段 star → 投影名 UnitLike.star
-```
-
-**评论：** 无参数结构的 type constructor 类型是裸 `Sort 0`（不是 Π 类型），constructor 类型只有一个 Π（字段部分）。
-
----
-
-## 15a. `elab`：从 SurfaceTerm 到 CoreTerm
-
-**位置说明：** 概念上，elaboration 在 kernel 检查之前 — 用户写的 SurfaceTerm 先经 elab 转成 CoreTerm，再交给 kernel。但因为 `elab` 内部调用 `infer_type` 和 `check_type`（§14），它必须在它们之后定义。
+**位置说明：** 概念上，elaboration 在 kernel 检查之前 — 用户写的 SurfaceTerm 先经 elab 转成 CoreTerm，再交给 kernel。但因为 `elab` 内部调用 `infer_type` 和 `check_type`（§14.3），它必须在它们之后定义。
 
 定义函数：
 
@@ -2935,7 +2830,9 @@ elab(S, Γ, st, A)          -- 有 expected type 时
 > 在状态 `S` 和上下文 `Γ` 下，把表层 term `st` elaboration 成核心 term。
 > 如果提供了 `expected`（目标类型），则用它指导 elaboration。
 
-**两层结构：** `elab` 实际由两个函数组成：
+模型采用 bidirectional typing：elab 处理 Surface→Core（`SPair` 需要 expected type，其余构造子自带足够信息），kernel 层 `infer_type`/`check_type` 只作用于 CoreTerm，所有 CoreTerm 构造子均可 infer。
+
+`elab` 实际由两个函数组成：
 
 ```text
 elab(S, Γ, st, expected) = check(elab_raw(S, Γ, st, expected), expected)
@@ -2946,7 +2843,61 @@ elab(S, Γ, st, expected) = check(elab_raw(S, Γ, st, expected), expected)
 
 **为什么需要两层？** 如果不分层，很多分支会忽略 `expected` — 比如 `SConst` 直接返回 `Const(name)`，不检查它是否真的有 expected type。拆分后，只要调用 `elab` 时传入了 `expected`，最终结果一定通过 `check_type` 验证。分支内部的 `check_type` 调用（如 `SPair` 中对分量的检查）仍然保留，用于指导 elaboration 过程和提前发现错误；外层的统一检查则作为兜底。
 
-### 15a.1 基本项
+### 15.0 Sigma 专用辅助函数
+
+以下函数硬编码 `Sigma` 和 `Sigma.mk`，供 `elab` 的 Sigma 专属分支（`SSigma`/`SPair`/`SFst`/`SSnd`，§15.5-§15.9）使用。一般化的结构处理应使用 `match_structure_type`（§13.1）。
+
+#### `is_sigma_type`
+
+```python
+# 写作 is_sigma_type(t)
+def is_sigma_type(t : CoreTerm) -> Optional[Pair[CoreTerm, CoreTerm]]:
+    '''
+    如果 t = App(App(Const Sigma, A), Bfun)，返回 Pair(A, Bfun)
+    否则返回 None
+    此函数只做模式匹配，不调用 whnf（调用者需要预先 whnf 输入）。
+    一般化的类型识别应使用 match_structure_type（§13.1）。
+    '''
+    if isinstance(t, App):
+        f_B, Bfun = t.args
+        if isinstance(f_B, App):
+            f_A, A = f_B.args
+            if isinstance(f_A, Const) and f_A.args == Sigma:
+                return Pair(A, Bfun)
+    return None
+```
+
+也就是说：
+
+```text
+is_sigma_type((Const Sigma) A Bfun) = Pair(A, Bfun)
+```
+
+其中 `Bfun` 通常是一个 lambda：`Bfun = fun (x : A) => B_body`。
+
+#### 元语言辅助函数
+
+为了写例子方便，定义两个**元语言**函数（不是 CoreTerm 构造子）：
+
+```python
+# 写作 mk_sigma_type(A, Bfun)
+def mk_sigma_type(A : CoreTerm, Bfun : CoreTerm) -> CoreTerm:
+    return App(App(Const(Sigma), A), Bfun)
+
+# 写作 mk_sigma_mk(A, Bfun, a, b)
+def mk_sigma_mk(A : CoreTerm, Bfun : CoreTerm, a : CoreTerm, b : CoreTerm) -> CoreTerm:
+    return App(App(App(App(Const(Sigma.mk), A), Bfun), a), b)
+```
+
+即：
+
+```text
+mk_sigma_type(A, Bfun) = (Const Sigma) A Bfun
+mk_sigma_mk(A, Bfun, a, b) = (Const Sigma.mk) A Bfun a b
+```
+
+---
+### 15.1 基本项
 
 表层的基本项直接映射到核心：
 
@@ -2963,7 +2914,7 @@ if isinstance(st, SVar):
 
 不需要 expected type。注意自 v7 起 CoreTerm 构造子没有 `C` 前缀。
 
-### 15a.2 App
+### 15.2 App
 
 ```python
 if isinstance(st, SApp):
@@ -2979,7 +2930,7 @@ if isinstance(st, SApp):
 
 **评论：** 先 elab 函数部分，推断其类型，获取参数的 expected type，再用它 elab 参数。逻辑与 v6 完全相同，只是输出使用非 C 前缀的构造子。
 
-### 15a.3 Lam
+### 15.3 Lam
 
 ```python
 if isinstance(st, SLam):
@@ -2995,7 +2946,7 @@ if isinstance(st, SLam):
 
 **评论：** `SLam` 要求用户显式写出参数类型 `A`，因此 `elab` 可以在没有 expected type 的情况下处理 `SLam`（`expected` 传入 `None`）。更接近 Lean 的实现会在有 expected type `Forall(x, A, B)` 时，将 `A` 作为参数的 expected type 传入，从而支持隐式参数类型推断 — 但当前模型不做这个优化。
 
-### 15a.4 Forall
+### 15.4 Forall
 
 ```python
 if isinstance(st, SForall):
@@ -3009,7 +2960,7 @@ if isinstance(st, SForall):
     return Forall(x, A_c, B_c)
 ```
 
-### 15a.5 Sigma
+### 15.5 Sigma
 
 ```python
 if isinstance(st, SSigma):
@@ -3038,9 +2989,9 @@ if isinstance(st, SSigma):
 - `mk_sigma_type(A_c, Bfun)` 构造 `App(App(Const Sigma, A_c), Bfun)`。
 - 从 v7 开始，`Σ (x : A), B` 是**记号（notation）**，不是 CoreTerm 的 primitive 构造子。它的 elaboration 结果是一个函数应用 — 把 `Const Sigma` 这个全局常量应用到 `A_c` 和 `Bfun` 上。
 - 表层仍然可以写 `Σ (x : A), B`，但底层只是 `Sigma A (fun x => B)` 的语法糖。
-- **`SSigma` 不是无条件可用的 primitive。** 它的 elaboration 结果引用 `Const Sigma`；因此必须先执行 StructureCmd Sigma（见 §15b.1），使 `Sigma` 和 `Sigma.mk` 出现在 State 中，后续类型检查才能成功。如果用户在 StructureCmd Sigma 执行之前就写 `SSigma(...)`，elab 会生成 `(Const Sigma) A Bfun`，但此时 `Sigma ∉ S.Axioms`，后续 `infer_type` 会失败。
+- **在 v9 中，`SSigma` 不是无条件可用的 primitive。** 它的 elaboration 结果引用 `Const Sigma`；因此必须先执行 StructureCmd Sigma（见 §17.1），使 `Sigma` 和 `Sigma.mk` 出现在 State 中，后续类型检查才能成功。如果用户在 StructureCmd Sigma 执行之前就写 `SSigma(...)`，elab 会生成 `(Const Sigma) A Bfun`，但此时 `Sigma ∉ S.Axioms`，后续 `infer_type` 会失败。
 
-### 15a.6 Ann
+### 15.6 Ann
 
 ```python
 if isinstance(st, SAnn):
@@ -3055,7 +3006,7 @@ if isinstance(st, SAnn):
 
 **评论：** 与 v6 完全相同。`SAnn(t, A)` 的 elaboration 结果是 `t_c` — Ann 不出现在输出中。它的唯一作用是：先 elab 类型 `A`，验证 `A` 是 type，然后把 `A_c` 作为 expected type 传给 `t` 的 elaboration。
 
-### 15a.7 Pair
+### 15.7 Pair
 
 ```python
 if isinstance(st, SPair):
@@ -3098,7 +3049,7 @@ v7 中 `SPair(a, b)` 在 expected type `(Const Sigma) A Bfun` 下 elaborate 成�
 - 返回 `mk_sigma_mk(A, Bfun, a_c, b_c)` — 这是一个纯 `App` 嵌套，没有特殊构造子。
 - 这就是 v6 中 `CPairTyped` 的逻辑移到了 elaboration 层，但产生的是 constructor application 而非特殊 core term。
 
-### 15a.8 Fst
+### 15.8 Fst
 
 ```python
 if isinstance(st, SFst):
@@ -3113,7 +3064,7 @@ if isinstance(st, SFst):
 
 **评论：** v6 中 `SFst(t)` elaborate 成 `CFst(t_c)` — 一个专门的 core 构造子。v7 中 `SFst(t)` elaborate 成 `Proj(Sigma, 0, t_c)` — 一个一般的 projection。表层 `fst t` 变成了 core 中的 `Proj(Sigma, 0, t_c)`。
 
-### 15a.9 Snd
+### 15.9 Snd
 
 ```python
 if isinstance(st, SSnd):
@@ -3128,90 +3079,46 @@ if isinstance(st, SSnd):
 
 **评论：** 与 Fst 完全平行。`SSnd(t)` elaborate 成 `Proj(Sigma, 1, t_c)`。表层 `snd t` 变成了 core 中的 `Proj(Sigma, 1, t_c)`。
 
-### 15a.10 SProj（qualified projection name）               【v10 新增】
+
+### 15.10 SProj                                                   【v10 新增】
 
 ```python
 if isinstance(st, SProj):
-    projectionName, target_s = st.args
-    proj_info = S.Projections.get(projectionName)
-    if proj_info is None:
-        raise Error                                # 投影名不存在于 State 中
-    structName = proj_info.structName
-    index = proj_info.index
-
-    target_c = elab(S, Γ, target_s, None)
-    Ttarget = whnf(S, infer_type(S, Γ, target_c))
-    params = match_structure_type(S, structName, Ttarget)
-    if params is None:
-        raise Error                                # target 的类型不是 structName 的完全应用
-    return Proj(structName, index, target_c)
+    projectionName, t_s = st.args
+    t_c = elab(S, Γ, t_s, None)
+    pi = S.Projections.get(projectionName)
+    if pi is None:
+        raise Error
+    return Proj(pi.structName, pi.fieldIndex, t_c)
 ```
 
-**评论：** `SProj(projectionName, target)` 是 v10 的通用投影语法 — 用投影名（如 `Sigma.a`、`Point.x`）直接指明结构。elab 步骤：
-1. 从 `S.Projections` 查询 `projectionName` → 得到 `ProjectionInfo(projName, structName, index)`
-2. elaborate `target` → 得到 `target_c`
-3. 检查 `target_c` 的类型是否是 `structName` 的完全应用（通过 `match_structure_type`）
-4. 返回 `Proj(structName, index, target_c)`
+**评论：** `SProj(projectionName, t)` 的 elaboration：先 elab target，然后用完整投影名查找 `ProjectionInfo`，从中同时取得 `structName` 和 `fieldIndex`。用户写 `Sigma.a p`，elaboration 后变成 `Proj(Sigma, 0, p)`。
 
-`SProj` 不需要 expected type — 投影名已经编码了全部信息（哪个结构、哪个字段）。`match_structure_type` 的检查确保 target 的类型与投影所属的结构匹配 — 如果 `SProj(Sigma.a, p)` 中的 `p : Prod A B`，elab 会报错（因为 `Sigma.a` 指向 Sigma 的字段，而 p 的类型是 Prod 应用）。
-
-**例子：**
-- `SProj(Sigma.a, p)`（其中 `p : Sigma A B`）→ `Proj(Sigma, 0, p_core)`
-- `SProj(Point.x, p)`（其中 `p : Point X`）→ `Proj(Point, 0, p_core)`
-- `SProj(Sigma.a, p)`（其中 `p : Prod A B`）→ Error（Sigma.a 指向 Sigma，但 p 是 Prod）
-
-### 15a.11 SDot（dot notation）                             【v10 新增】
+### 15.11 SDot                                                     【v10 新增】
 
 ```python
 if isinstance(st, SDot):
-    target_s, fieldName = st.args
-    target_c = elab(S, Γ, target_s, None)
-    Ttarget = whnf(S, infer_type(S, Γ, target_c))
-
-    # 从 target 的类型推断结构名
-    head_args = collect_app(Ttarget)
+    t_s, fieldName = st.args
+    t_c = elab(S, Γ, t_s, None)
+    Tt = whnf(S, infer_type(S, Γ, t_c))
+    # 从 target 类型推断结构名
+    head_args = collect_app(Tt)
     head, args = head_args.args
     if not isinstance(head, Const):
-        raise Error                                # target 的类型不是结构类型的应用
+        raise Error
     structName = head.args
-
-    structInfo = S.Structures.get(structName)
-    if structInfo is None:
-        raise Error                                # structName 不是已知结构
-
-    if len(args) != len(structInfo.params):
-        raise Error                                # 类型不是结构类型的完全应用
-
-    # 在结构字段中查找 fieldName
-    index = None
-    for j, field in enumerate(structInfo.fields):
-        if field.name == fieldName:
-            index = j
-            break
-    if index is None:
-        raise Error                                # fieldName 不是该结构的字段名
-
-    return Proj(structName, index, target_c)
+    proj_name = append_local(structName, fieldName)
+    pi = S.Projections.get(proj_name)
+    if pi is None or pi.structName != structName:
+        raise Error
+    return Proj(pi.structName, pi.fieldIndex, t_c)
 ```
 
-**评论：** `SDot(target, fieldName)` 是 v10 的 dot notation — 用字段名和类型推断来确定投影。elab 步骤：
-1. elaborate `target` → 得到 `target_c`
-2. 推断 `target_c` 的类型 → whnf → collect_app → 得到 head（`Const structName`）和 args
-3. 查 `S.Structures.get(structName)` → 得到 StructureInfo
-4. 检查 args 的数量 = `len(structInfo.params)`（确保是完全应用）
-5. 在 `structInfo.fields` 中查找 `fieldName` → 得到 `index`
-6. 返回 `Proj(structName, index, target_c)`
+**评论：** `SDot(target, fieldName)` 的 elaboration：先 elab target，推断其类型，从类型的头部提取结构名（如 `(Const Sigma) A Bfun` → `Sigma`），然后用 `structName.fieldName` 查找投影信息。用户写 `p.a`，elaboration 后变成 `Proj(Sigma, 0, p)`。
 
-`SDot` 不需要 expected type — 类型推断从 `target` 的类型中获取信息。与 `SProj` 的区别：`SProj` 用投影名直接指明结构（`Sigma.a`），`SDot` 用字段名需要推断结构（`p.a` — 需要先推断 p 的类型才能知道 a 属于哪个结构）。如果 target 的类型是多个结构的应用（理论上不可能 — 完全应用的结构类型只有一个 head），elab 报错。
+**SProj vs SDot：** `SProj` 显式给出完整投影名，不需要从 target 类型推断结构名；`SDot` 从 target 的类型推断结构名。两者最终都产生相同的 `Proj`。
 
-**歧义情况：** 如果两个结构有同名字段（如 Sigma 和 Prod 都有字段名 `a`），`SDot(p, a)` 不会歧义 — 因为推断 p 的类型只会匹配一个结构。`SProj(Sigma.a, p)` 也不会歧义 — 因为投影名唯一标识结构。但裸字段名 `a`（不带 target）无法使用 — v10 不支持裸投影名语法。
-
-**例子：**
-- `SDot(p, a)`（其中 `p : Sigma A B`）→ `Proj(Sigma, 0, p_core)`（a 是 Sigma 的第 0 个字段）
-- `SDot(p, b)`（其中 `p : Sigma A B`）→ `Proj(Sigma, 1, p_core)`（b 是 Sigma 的第 1 个字段）
-- `SDot(p, x)`（其中 `p : Point X`）→ `Proj(Point, 0, p_core)`（x 是 Point 的第 0 个字段）
-
-### 15a.12 `elab` 完整代码
+### 15.12 `elab` 完整代码
 
 ```python
 # 写作 elab(S, Γ, st) 或 elab(S, Γ, st, expected)
@@ -3236,7 +3143,6 @@ def elab_raw(S: State, Γ: Context, st: SurfaceTerm, expected: Optional[CoreTerm
     不检查最终结果是否满足 expected — 由外层 elab 统一检查。
     自 v7 起：Sigma/Pair/Fst/Snd 不再产生特殊 core 构造子，
     而是产生 Const Sigma/Sigma.mk 的应用和 Proj 投影。
-    v10 新增：SProj 和 SDot 产生 Proj(structName, index, target_c)。
     '''
 
     if isinstance(st, SConst):
@@ -3334,184 +3240,390 @@ def elab_raw(S: State, Γ: Context, st: SurfaceTerm, expected: Optional[CoreTerm
             raise Error
         return Proj(Sigma, 1, t_c)
 
-    if isinstance(st, SProj):                                 # v10 新增
-        projectionName, target_s = st.args
-        proj_info = S.Projections.get(projectionName)
-        if proj_info is None:
+    if isinstance(st, SProj):
+        projectionName, t_s = st.args
+        t_c = elab(S, Γ, t_s, None)
+        pi = S.Projections.get(projectionName)
+        if pi is None:
             raise Error
-        structName = proj_info.structName
-        index = proj_info.index
-        target_c = elab(S, Γ, target_s, None)
-        Ttarget = whnf(S, infer_type(S, Γ, target_c))
-        params = match_structure_type(S, structName, Ttarget)
-        if params is None:
-            raise Error
-        return Proj(structName, index, target_c)
+        return Proj(pi.structName, pi.fieldIndex, t_c)
 
-    if isinstance(st, SDot):                                  # v10 新增
-        target_s, fieldName = st.args
-        target_c = elab(S, Γ, target_s, None)
-        Ttarget = whnf(S, infer_type(S, Γ, target_c))
-        head_args = collect_app(Ttarget)
+    if isinstance(st, SDot):
+        t_s, fieldName = st.args
+        t_c = elab(S, Γ, t_s, None)
+        Tt = whnf(S, infer_type(S, Γ, t_c))
+        head_args = collect_app(Tt)
         head, args = head_args.args
         if not isinstance(head, Const):
             raise Error
         structName = head.args
-        structInfo = S.Structures.get(structName)
-        if structInfo is None:
+        proj_name = append_local(structName, fieldName)
+        pi = S.Projections.get(proj_name)
+        if pi is None or pi.structName != structName:
             raise Error
-        if len(args) != len(structInfo.params):
-            raise Error
-        index = None
-        for j, field in enumerate(structInfo.fields):
-            if field.name == fieldName:
-                index = j
-                break
-        if index is None:
-            raise Error
-        return Proj(structName, index, target_c)
+        return Proj(pi.structName, pi.fieldIndex, t_c)
 
     raise Error
 ```
 
 **注意：** `elab_raw` 内部的递归调用使用 `elab`（外层包装）而非 `elab_raw`。这保证每层递归的 expected type 都被检查。例如 `SApp` 分支中 `a_c = elab(S, Γ, a_s, A)` 会检查 `a_c : A`，即使 `a_s` 是 `SConst` 这样的基本项。
 
-**总结：** `elab` 把 SurfaceTerm 转换成 CoreTerm。重要变化总结：
+**总结：** `elab` 把 SurfaceTerm 转换成 CoreTerm。v7 的重要变化：
 
-- `SSigma(x, A, B)` → `(Const Sigma) A (fun (x : A) => B)` — 一个全局常量的应用。
-- `SPair(a, b)` → `(Const Sigma.mk) A Bfun a b` — 一个构造子的应用。
-- `SFst(t)` → `Proj(Sigma, 0, t_c)` — 一个一般的 projection（Sigma 专属语法）。
-- `SSnd(t)` → `Proj(Sigma, 1, t_c)` — 一个一般的 projection（Sigma 专属语法）。
-- `SAnn(t, A)` → `t_core` — Ann 被消耗。
-- `SProj(projectionName, t)` → `Proj(structName, index, t_c)` — 通用投影语法（v10 新增，查 `S.Projections`）。
-- `SDot(t, fieldName)` → `Proj(structName, index, t_c)` — dot notation（v10 新增，推断 t 的类型后查 StructureInfo）。
+- `SSigma(x, A, B)` 不再产生 `CSigma(x, A, B)`，而是产生 `(Const Sigma) A (fun (x : A) => B)` — 一个全局常量的应用。
+- `SPair(a, b)` 不再产生 `CPairTyped(x, A, B, a, b)`，而是产生 `(Const Sigma.mk) A B a b` — 一个构造子的应用。
+- `SFst(t)` 不再产生 `CFst(t_c)`，而是产生 `Proj(Sigma, 0, t_c)` — 一个一般的 projection。
+- `SSnd(t)` 不再产生 `CSnd(t_c)`，而是产生 `Proj(Sigma, 1, t_c)` — 一个一般的 projection。
+- `SAnn(t, A)` 仍然被消耗，不出现在输出中。
 
-**注意：** `SSigma`、`SPair`、`SFst`、`SSnd` 仍然硬编码引用 `Const Sigma` — 只在 StructureCmd Sigma 执行后才可用。`SProj` 和 `SDot` 是通用的投影语法 — 适用于所有通过 StructureCmd 声明的结构。两者可以共存：`SProj(Sigma.a, p)` 和 `SFst(p)` 都 elaborate 成 `Proj(Sigma, 0, p_core)`。
+**注意：** `elab` 的 Sigma 专属分支（`SSigma`、`SPair`、`SFst`、`SSnd`）硬编码引用 `Const Sigma` — 只在 StructureCmd Sigma 执行后才可用。v10 新增的 `SProj` 和 `SDot` 分支通过 `ProjectionInfo` 查找投影信息，对任何已注册的结构都适用。
 
 ---
 
-## 16. `State` 与 `Context` 的角色
 
-简短回顾两者的分工：
+## 16. 构建前置状态 `S`                                         【v10 修改】
 
-- **State**：记录全局名字（axiom 和 def）的类型，以及结构信息和投影信息。`Const n` 的类型由 `S.Axioms` 或 `S.Defs` 决定。`S.Structures` 记录哪些全局名字是结构类型、它们的构造子是谁、参数和字段的名字与类型模板。`S.Projections` 记录投影名与结构名、字段下标的映射（v10 新增）。
-- **Context**：记录当前 binder 打开的局部变量类型。`Var x` 的类型由 `Γ.Types` 决定。
+为了后续展示 `elab` / `whnf` / `defeq` / `StructureCmd` 的例子，先构建一个共同的前置状态 `S`。
 
-例如：
+v9 不预置任何结构。从空初始状态 `S₀`（§10）开始，先通过 StructureCmd 定义 Sigma 和 Prod，再添加 axiom。
 
 ```text
-S ; Γ ⊢ Const Nat : Sort (level 0)           -- 类型来自 S.Axioms
-S ; (Γ, x : Const Nat) ⊢ Var x : Const Nat   -- 类型来自 Γ.Types
+S₁ = exec(S₀, StructureCmd Sigma Sigma.mk
+  params = [A : SSort 0, B : SForall(x, SVar A, SSort 0)]
+  fields = [a : SVar A, b : SApp(SVar B, SVar a)])       （完整推导见 §17.1）
+
+SΣ = S₁  （缩写）
+
+S₂ = exec(SΣ, StructureCmd Prod Prod.mk
+  params = [A : SSort 0, B : SSort 0]
+  fields = [a : SVar A, b : SVar B])                     （完整推导见 §17.2）
+
+SΣΠ = S₂  （缩写）
+
+S₃ = exec(SΣΠ, AxiomCmd Nat : SSort (level 0))
+S₄ = exec(S₃, AxiomCmd zero : SConst Nat)
+S₅ = exec(S₄, AxiomCmd Pred : SForall (x, SConst Nat, SSort (level 0)))
+S₆ = exec(S₅, AxiomCmd choosePred : SForall (x, SConst Nat, SApp (SConst Pred, SVar x)))
+
+S = S₆
 ```
 
-`StructureInfo` 记录 `params` 和 `fields` 的名字与类型模板。它使得 `whnf` 和 `infer_type` 的 `Proj` 分支都可以查找结构信息，不依赖硬编码。`ProjectionInfo` 记录投影名与结构名、字段下标的映射，它使得 `elab` 的 `SProj` 和 `SDot` 分支可以查询投影名（§15a）。v10 中所有 StructureInfo 和 ProjectionInfo 都通过 StructureCmd 生成，不再预置。
+最终得到的状态 `S`：
 
-State 是顶层、长期的（贯穿整个文件的推导）；Context 是局部、临时的（只在打开 binder 时存在）。
+```text
+S.Axioms = {
+  Sigma      : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0,
+  Sigma.mk   : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B,
+  Prod       : Π (A : Sort 0), Π (B : Sort 0), Sort 0,
+  Prod.mk    : Π (A : Sort 0), Π (B : Sort 0), Π (a : A), Π (b : B), Prod A B,
+  Nat        : Sort (level 0),
+  zero       : Const Nat,
+  Pred       : Forall (x, Const Nat, Sort (level 0)),
+  choosePred : Forall (x, Const Nat, App (Const Pred, Var x))
+}
+S.Defs = {}
+S.Projections = {
+  Sigma.a : ProjectionInfo(Sigma.a, Sigma, 0),
+  Sigma.b : ProjectionInfo(Sigma.b, Sigma, 1),
+  Prod.a  : ProjectionInfo(Prod.a, Prod, 0),
+  Prod.b   : ProjectionInfo(Prod.b, Prod, 1)
+}
+S.Structures = {
+  Sigma : StructureInfo(Sigma, Sigma.mk, params=[A, B], fields=[(a, Var A), (b, App(Var B, Var a))]),
+  Prod  : StructureInfo(Prod, Prod.mk, params=[A, B], fields=[(a, Var A), (b, Var B)])
+}
+```
+
+四个 axiom 的角色：
+- `Nat`：全局 type
+- `zero`：`Nat` 的全局常量
+- `Pred`：依值 type family — 对每个 `x : Nat`，`Pred x` 是一个 type
+- `choosePred`：依值函数 — 对每个 `x : Nat`，给出 `Pred x` 的一个元素
+
+由这些 axiom 立即可得（任意上下文 `Γ` 下）：
+
+```text
+S ; Γ ⊢ Const Nat        : Sort (level 0)
+S ; Γ ⊢ Const zero       : Const Nat
+S ; Γ ⊢ Const Pred       : Forall (x, Const Nat, Sort (level 0))
+S ; Γ ⊢ Const choosePred : Forall (x, Const Nat, App (Const Pred, Var x))
+S ; Γ ⊢ App (Const Pred, Const zero) : Sort (level 0)
+S ; Γ ⊢ App (Const choosePred, Const zero) : App (Const Pred, Const zero)
+```
+
+**评论：** 后续 §18-§21 的所有例子都基于这个状态 `S`。需要时会在用到的地方临时扩展状态（如 §19.4 加入 `pair0`，§19.6 加入 `Point`）。v9 中 Sigma 和 Prod 都不再预置 — 全部通过 StructureCmd 定义，类型签名和 StructureInfo 由 exec 自动生成（完整推导见 §17）。
 
 ---
 
-## 17. 关于 bidirectional typing
+## 17. StructureCmd 例子                                    【v10 修改】
 
-当前模型将 bidirectional typing 分为两层：
-- **elaboration 层**：`elab` 处理 SurfaceTerm → CoreTerm 的转换。`SPair` 需要 expected type 才能 elaborate。
-- **kernel 层**：`infer_type` / `check_type` 只作用于 CoreTerm。所有 CoreTerm 都可以 infer。
+本节展示 `StructureCmd` 的完整执行过程，逐步骤对照 §9.4 中的五步规则。
 
-### 17.1 哪些 CoreTerm 可以 infer？
+### 17.1 StructureCmd Sigma（依值结构）— v9 的核心例子
 
-以下 CoreTerm 可以在 `infer_type` 中成功推断类型：
+**输入：**
 
 ```text
-Var x              → 从 Context 中查到
-Const n            → 从 State 中查到（Axioms 或 Defs）
-Sort u             → 总是 Sort (succ_level(u))
-App f a            → 从函数类型 + substitution 中算出
-Lam x A body       → 自带类型注解 A，可以算出 Forall(x, A, B)
-Forall x A B       → 可以算出 Sort(max(u, v))
-Proj structName i p → 第 i 个字段的类型（从 StructureInfo 的 fields 中取出，通过 projection_type）
+cmd = StructureCmd Sigma Sigma.mk
+  params = [ParamDecl(A, SSort(level 0)), ParamDecl(B, SForall(x, SVar A, SSort(level 0)))]
+  fields = [FieldDecl(a, SVar A), FieldDecl(b, SApp(SVar B, SVar a))]
 ```
 
-**评论：** 注意 Sigma type 的 formation 和 Sigma.mk 的应用类型可以完全通过 `Const` + `App` 的推断规则链得到 — 不需要特殊的 `CSigma` 和 `CPairTyped` 分支。`Proj` 仍然需要一个专门的 `infer_type` 分支（§14），但这个分支通过 `match_structure_type` + `projection_type` 实现，对 Sigma 和 Prod 都适用。
+即用户声明：`structure Sigma (A : Sort 0) (B : Π (x : A), Sort 0) where a : A, b : B a`
 
-### 17.2 哪些 SurfaceTerm 需要 expected type 才能 elaborate？
+**执行过程（在空状态 S₀ 中）：**
+
+**第一步：名字检查**
 
 ```text
-SPair a b  → 需要 expected type 是 Sigma 类型
+Sigma ∉ S₀.Axioms     ✓ (S₀ 是空状态)
+Sigma ∉ S₀.Defs       ✓
+Sigma ∉ S₀.Structures ✓
+Sigma.mk ∉ S₀.Axioms  ✓
+Sigma.mk ∉ S₀.Defs    ✓
+Sigma.mk ∉ S₀.Structures ✓
 ```
 
-v10 新增的 `SProj` 和 `SDot` 不需要 expected type：
+名字无冲突 ✓
+
+**第二步：Telescope 检查**
+
+参数 elaboration：
 
 ```text
-SProj(projectionName, target) → 不需要（投影名编码了全部信息）
-SDot(target, fieldName)       → 不需要（类型推断从 target 的类型获取信息）
+Γ0 = ∅
+
+ParamDecl(A, SSort(level 0)):
+  T_A_core = elab(S₀, Γ0, SSort(level 0), None) = Sort(level 0)
+  whnf(S₀, infer_type(S₀, Γ0, Sort(level 0))) = Sort(level 1)    ← 是 Sort ✓
+  Γ1 = Γ0, A : Sort(level 0)
+
+ParamDecl(B, SForall(x, SVar A, SSort(level 0))):
+  T_B_core = elab(S₀, Γ1, SForall(x, SVar A, SSort(level 0)), None)
 ```
 
-`SPair` 需要 expected type 的原因是：同样的 `⟨a, b⟩`，在不同的目标 Sigma 类型下可能有不同的合法性。`SPair` 自身不携带 `B` 的信息。
-
-但通过 `SAnn`，可以把 `SPair` 包装起来，让 elab 有 expected type：
+elab 处理 `SForall(x, SVar A, SSort(level 0))`：
+- A_c = Var A（从 Γ1 查到 A : Sort(level 0)）
+- B_c = Sort(level 0)
+- 结果 = `Forall(x, Var A, Sort(level 0))`（写作 `Π (x : A), Sort 0`）
 
 ```text
-SAnn(SPair(a, b), SSigma(x, A, B))  →  elab 得到 Sigma.mk A Bfun a_core b_core
+  T_B_core = Π (x : Var A), Sort (level 0)
+  whnf(S₀, infer_type(S₀, Γ1, Π (x : Var A), Sort (level 0))) = Sort(level 1)    ← 是 Sort ✓
+  Γ2 = Γ1, B : Π (x : Var A), Sort (level 0)
 ```
 
-### 17.3 调用链
+注意：B 的值是一个返回 Sort 0 的 type family；但 B 的类型 `Π (x : A), Sort 0` 本身生活在 Sort 1（由 Forall 规则：`Π (x : A), Sort 0 : Sort(max(0, 1)) = Sort 1`）。Telescope 检查只要求参数类型是某个 Sort，因此通过。
 
-函数调用链：
+这里 elab 不需要 Sigma 已存在于状态中 — `SForall` 是基本 SurfaceTerm 构造子，不是 `SSigma`。
+
+字段 elaboration（在 Γ2 中）：
 
 ```text
-elab 调用 infer_type / check_type：
-  - SApp 规则中，推断函数类型
-  - SPair 规则中，check 分量类型
-  - SAnn 规则中，验证类型标注
-  - SLam/SForall/SSigma 规则中，验证 domain 是 type
-  - SFst/SSnd 规则中，验证参数类型是 Sigma 类型
-  - SProj 规则中，验证 target 类型与 ProjectionInfo 所属结构匹配（v10 新增）
-  - SDot 规则中，推断 target 类型并查找 fieldName（v10 新增）
+FieldDecl(a, SVar A):
+  F_a_core = elab(S₀, Γ2, SVar A, None) = Var A
+  whnf(S₀, infer_type(S₀, Γ2, Var A)) = Sort(level 0)           ← 是 Sort ✓
+  Γ3 = Γ2, a : Var A
 
-elab 调用辅助函数：
-  - SSigma 规则中，调用 mk_sigma_type 构造 Sigma 类型
-  - SPair 规则中，调用 is_sigma_type 识别 Sigma 类型，调用 mk_sigma_mk 构造 Sigma.mk 应用
-  - SProj 规则中，查 S.Projections 获取 ProjectionInfo，调用 match_structure_type 验证 target 类型（v10 新增）
-  - SDot 规则中，调用 collect_app 拆解 target 类型，查 S.Structures 获取 StructureInfo（v10 新增）
-
-infer_type 调用辅助函数（§12a）：
-  - Proj 规则中，调用 match_structure_type 匹配结构类型、提取参数值（§12a.2）
-  - Proj 规则中，调用 projection_type 从 StructureInfo 的 fields 中计算字段类型（§12a.3）
-
-infer_type 调用 check_type：
-  - App 规则中，检查参数类型
-
-check_type 调用 infer_type：
-  - 默认分支：先 infer 再 defeq 比较
-
-exec(StructureCmd) 调用辅助函数 + elab + infer_type（§7.4）：
-  - telescope 检查中，调用 elab elaborate 参数/字段类型
-  - telescope 检查中，调用 whnf + infer_type 验证类型是 Sort
-  - 类型生成中，调用 make_structure_type 构造 type constructor 类型（§5b.3）
-  - 类型生成中，调用 make_constructor_type 构造 constructor 类型（§5b.4）
-  - ProjectionInfo 生成中，自动生成投影名 qualified_name(typeName, fieldName)（§7.4 第四步，v10 新增）
+FieldDecl(b, SApp(SVar B, SVar a)):
+  F_b_core = elab(S₀, Γ3, SApp(SVar B, SVar a), None)
 ```
 
-### 17.4 和 Lean 的对应
+elab 处理 `SApp(SVar B, SVar a)`：
+- f_c = Var B（从 Γ3 查到 B : Π (x : Var A), Sort(level 0)）
+- Tf = Π (x : Var A), Sort(level 0)，expected arg type = Var A
+- a_c = Var a（从 Γ3 查到 a : Var A）
+- check_type(S₀, Γ3, Var a, Var A) ✓
+- 结果 = `App(Var B, Var a)`（写作 `B a`）
 
-| 我们的模型 | Lean 中的对应 |
-|---|---|
-| `SSigma(x, A, B)` → `(Const Sigma) A Bfun` | `Σ (x : A), B` is notation for `Sigma A (fun x => B)` |
-| `SPair(a, b)` → `(Const Sigma.mk) A Bfun a b` | `⟨a, b⟩` elaborates to `Sigma.mk` application |
-| `SFst(t)` → `Proj(Sigma, 0, t_c)` | `fst p` becomes `Proj` |
-| `SSnd(t)` → `Proj(Sigma, 1, t_c)` | `snd p` becomes `Proj` |
-| `SAnn(t, A)` → consumed during elab | Type annotations help elaborator |
-| `SProj(Sigma.a, t)` → `Proj(Sigma, 0, t_c)` | `Sigma.fst p` elaborates to `Proj`（投影名 ↔ Lean 的 projection declaration） |
-| `SDot(t, a)` → `Proj(Sigma, 0, t_c)` | `p.fst` / `p.a` elaborates to `Proj`（dot notation ↔ Lean 的 dot notation） |
+```text
+  F_b_core = App(Var B, Var a)
+  whnf(S₀, infer_type(S₀, Γ3, App(Var B, Var a))) = Sort(level 0)    ← 是 Sort ✓
+```
 
-**Prod 对应：** Prod.mk 应用 ↔ Lean 的 `Prod.mk` 应用；`Proj(Prod, 0, ...)` ↔ Lean 的 `Prod.fst`；`Proj(Prod, 1, ...)` ↔ Lean 的 `Prod.snd`；`SProj(Prod.a, p)` ↔ Lean 的 `Prod.fst p`；`SDot(p, a)` ↔ Lean 的 `p.fst`。
+所有类型都是 Sort ✓。Sigma 的参数 B 是依值类型（Π 类型），字段 b 的类型也依赖前序字段 a — 这展示了 StructureCmd 对依值结构的处理能力。
 
-**Method A vs Lean 的区别：** 在真实 Lean 中，`Sigma.fst` 是一个有类型的全局常量（可以部分应用、可以作为函数传递），且有 reduction rule。在 Method A 中，`Sigma.a` 只是 elaboration 元数据 — 不能作为 `Const Sigma.a` 使用，也不能部分应用。这是 v10 的简化选择；将来切换到 Method B 后，投影名会变成真正的全局常量。
+**第三步：类型生成**
 
-### 17.5 架构变化
+```text
+info = StructureInfo(
+  typeName    = Sigma,
+  constructor = Sigma.mk,
+  params = [ParamInfo(A, Sort(level 0)), ParamInfo(B, Π (x : Var A), Sort(level 0))],
+  fields = [FieldInfo(a, Var A), FieldInfo(b, App(Var B, Var a))]
+)
 
-v10 的变化：Surface → Core 新增 SProj/SDot 分支；exec(StructureCmd) 新增 ProjectionInfo 生成（第五步）；Kernel 规则（whnf、infer_type、defeq、projection_type）不变。
+type_type = make_structure_type(info)
+```
+
+`make_structure_type` 按 v9 的单宇宙简化规则，直接把结构结果类型固定为 `Sort(level 0)`（不计算 result_level）：
+
+- telescope = `[(A, Sort(level 0)), (B, Π (x : Var A), Sort(level 0))]`
+- 结果 = `make_forall_chain([(A, Sort(level 0)), (B, Π (x : Var A), Sort(level 0))], Sort(level 0))`
+- = `Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0`
+
+即 **Sigma : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0** ✓
+
+```text
+constructor_type = make_constructor_type(info)
+```
+
+`make_constructor_type` 的计算：
+
+- telescope = `[(A, Sort(level 0)), (B, Π (x : Var A), Sort(level 0)), (a, Var A), (b, App(Var B, Var a))]`
+- body = `make_type_app(Sigma, [A, B])` = `(Const Sigma) (Var A) (Var B)`
+- 结果 = `Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B`
+
+即 **Sigma.mk : Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B** ✓
+
+**第四步：生成 ProjectionInfo** — 为每个字段生成投影信息。    【v10 新增】
+
+```text
+proj_infos = {}
+for field_index, field in enumerate(info.fields):
+    proj_name = append_local(info.typeName, field.name)
+    proj_infos[proj_name] = ProjectionInfo(proj_name, info.typeName, field_index)
+```
+
+**评论：** 第四步为每个字段生成唯一的投影名（如 `Sigma.a`、`Sigma.b`），并将 `ProjectionInfo` 写入 `S.Projections`。这使得后续 `SProj` 和 `SDot` 的 elaboration 可以通过投影名查找到结构名和字段下标。
+
+**第五步：状态更新**
+
+```text
+SΣ = State(
+    Axioms      = S₀.Axioms.set(Sigma, Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Sort 0)
+                    .set(Sigma.mk, Π (A : Sort 0), Π (B : Π (x : A), Sort 0), Π (a : A), Π (b : B a), Sigma A B),
+    Defs        = S₀.Defs,
+    Structures  = S₀.Structures.set(Sigma, StructureInfo(...)),
+    Projections = {
+      Sigma.a : ProjectionInfo(Sigma.a, Sigma, 0),
+      Sigma.b : ProjectionInfo(Sigma.b, Sigma, 1)
+    }
+)
+```
+
+**验证：** 执行后：
+- `Const Sigma` 的类型可以通过 `infer_type` 推断 ✓
+- `Const Sigma.mk` 的类型可以通过 `infer_type` 推断 ✓
+- `Proj(Sigma, 0, ...)` 和 `Proj(Sigma, 1, ...)` 的类型推断和 whnf 化简都可以工作 ✓
+- elab 的 `SSigma`/`SPair`/`SFst`/`SSnd` 分支现在可以工作
+- `SProj` 和 `SDot` 的 elaboration 可以通过 `S.Projections` 查找投影信息 ✓ — 因为 Sigma 和 Sigma.mk 已在 S.Axioms 中，Sigma 已在 S.Structures 中 ✓
+
+**评论：** 这是 v9 的核心进展 — Sigma 不再是预置的魔法对象，而是通过 StructureCmd 定义出来的。它与 Prod、Point 使用完全相同的机制（五步执行：名字检查 → telescope 检查 → 类型生成 → ProjectionInfo 生成 → 状态更新）。唯一的区别是 Sigma 有依值参数和依值字段（B 引用 A，b 引用 a 和 B），而 Prod 和 Point 没有 — 但 StructureCmd 的 telescope 检查逐步扩展上下文，天然支持依值类型。
+
+elab 的 `SSigma`/`SPair`/`SFst`/`SSnd` 分支仍然硬编码引用 `Const Sigma` — 这是 surface 层的 Sigma 专属语法，不是 StructureCmd 的限制。其他结构的 surface 语法是后续版本的工作。
+
+### 17.2 StructureCmd Prod（非依值结构）
+
+**输入：**
+
+```text
+cmd = StructureCmd Prod Prod.mk
+  params = [ParamDecl(A, SSort(level 0)), ParamDecl(B, SSort(level 0))]
+  fields = [FieldDecl(a, SVar A), FieldDecl(b, SVar B)]
+```
+
+即用户声明：`structure Prod (A : Sort 0) (B : Sort 0) where a : A, b : B`
+
+**执行过程（在 SΣ 中）：**
+
+**第一步：名字检查** — Prod 和 Prod.mk 不在 SΣ 中 ✓
+
+**第二步：Telescope 检查**
+
+```text
+Γ0 = ∅
+
+ParamDecl(A, SSort(level 0)):
+  T_A_core = Sort(level 0)
+  type = Sort(level 1) ✓
+  Γ1 = Γ0, A : Sort(level 0)
+
+ParamDecl(B, SSort(level 0)):
+  T_B_core = Sort(level 0)
+  type = Sort(level 1) ✓
+  Γ2 = Γ1, B : Sort(level 0)
+
+FieldDecl(a, SVar A):
+  F_a_core = Var A
+  type = Sort(level 0) ✓  (在 Γ2 中 Var A : Sort(level 0))
+  Γ3 = Γ2, a : Var A
+
+FieldDecl(b, SVar B):
+  F_b_core = Var B
+  type = Sort(level 0) ✓  (在 Γ3 中 Var B : Sort(level 0))
+```
+
+**第三步：类型生成**
+
+```text
+info = StructureInfo(
+  typeName    = Prod,
+  constructor = Prod.mk,
+  params = [ParamInfo(A, Sort(level 0)), ParamInfo(B, Sort(level 0))],
+  fields = [FieldInfo(a, Var A), FieldInfo(b, Var B)]
+)
+```
+
+`make_structure_type`：
+
+- telescope = `[(A, Sort(level 0)), (B, Sort(level 0))]`
+- 结果 = `Π (A : Sort 0), Π (B : Sort 0), Sort 0`
+
+即 **Prod : Π (A : Sort 0), Π (B : Sort 0), Sort 0**
+
+`make_constructor_type`：
+
+- telescope = `[(A, Sort(level 0)), (B, Sort(level 0)), (a, Var A), (b, Var B)]`
+- body = `make_type_app(Prod, [A, B])` = `(Const Prod) (Var A) (Var B)`
+- 结果 = `Π (A : Sort 0), Π (B : Sort 0), Π (a : A), Π (b : B), Prod A B`
+
+即 **Prod.mk : Π (A : Sort 0), Π (B : Sort 0), Π (a : A), Π (b : B), Prod A B**
+
+**对比：** 这与 v8 中预置的 Prod 和 Prod.mk 类型完全相同。StructureInfo 的 params/fields 也完全相同。这验证了 StructureCmd 可以替代预置方式 — 从 v9 起，Prod 不再预置，而是通过 StructureCmd 定义。
+
+**评论：** Prod 的第二字段类型是 `Var B`（非依值），与 Sigma 的 `App(Var B, Var a)`（依值）形成对比。这个区别完全由 `FieldInfo.type` 模板表达，StructureCmd 的机制不需要区分。
+
+### 17.3 StructureCmd Point
+
+在状态 `S` 的基础上执行：
+
+```text
+S' = exec(S, StructureCmd Point Point.mk
+  params = [ParamDecl(X, SSort(level 0))]
+  fields = [FieldDecl(x, SVar X), FieldDecl(y, SVar X)])
+```
+
+推导与 §17.1 类似但更简单（1 个参数、2 个字段，无依值关系）。生成的类型：
+
+```text
+Point    : Π (X : Sort 0), Sort 0
+Point.mk : Π (X : Sort 0), Π (x : X), Π (y : X), Point X
+```
+
+whnf 和 defeq 例子见 §19.6 和 §20.5。
+
+### 17.4 StructureCmd UnitLike（无参数）
+
+该例子应在已经包含 `Nat : Sort 0` 的状态中执行（例如 §16 构造出的状态 S），因为 `SConst Nat` 的 elaboration 需要 `Nat` 已存在于 `S.Axioms` 中。
+
+```text
+cmd = StructureCmd UnitLike UnitLike.mk
+  params = []
+  fields = [FieldDecl(star, SConst Nat)]
+```
+
+生成的类型：
+
+```text
+UnitLike    : Sort 0                   （无参数，type constructor 类型是裸 Sort）
+UnitLike.mk : Π (star : Nat), UnitLike
+```
+
+**评论：** 无参数结构的 type constructor 类型是裸 `Sort 0`（不是 Π 类型），constructor 类型只有一个 Π（字段部分）。
 
 ---
+
 
 ## 18. 关键 term：`p_ann`
 
@@ -3575,7 +3687,7 @@ App(
 
 ### 18.3 `Proj` 在 `p_core` 上的类型
 
-由 `Proj` 的 `infer_type` 规则 (§14)：
+由 `Proj` 的 `infer_type` 规则 (§14.3)：
 
 ```text
 infer_type(S, ∅, Proj(Sigma, 0, p_core)) = Const Nat
@@ -3615,15 +3727,15 @@ S.Axioms = SΣΠ.Axioms ∪ {
   choosePred : Forall (x, Const Nat, App (Const Pred, Var x))
 }
 S.Defs = {}
+S.Projections = {
+  Sigma.a : ProjectionInfo(Sigma.a, Sigma, 0),
+  Sigma.b : ProjectionInfo(Sigma.b, Sigma, 1),
+  Prod.a  : ProjectionInfo(Prod.a, Prod, 0),
+  Prod.b   : ProjectionInfo(Prod.b, Prod, 1)
+}
 S.Structures = {
   Sigma : StructureInfo(Sigma, Sigma.mk, params=[A, B], fields=[(a, Var A), (b, App(Var B, Var a))]),
   Prod  : StructureInfo(Prod, Prod.mk, params=[A, B], fields=[(a, Var A), (b, Var B)])
-}
-S.Projections = {
-  Sigma.a ↦ ProjectionInfo(Sigma.a, Sigma, 0),
-  Sigma.b ↦ ProjectionInfo(Sigma.b, Sigma, 1),
-  Prod.a  ↦ ProjectionInfo(Prod.a, Prod, 0),
-  Prod.b  ↦ ProjectionInfo(Prod.b, Prod, 1)
 }
 ```
 
@@ -3665,7 +3777,6 @@ S' = exec(S, DefCmd pair0
   SPair(SConst zero, SApp(SConst choosePred, SConst zero)))
 
 S'.Defs.get(pair0) = Pair(Sigma_type, p_core)
-S'.Projections = S.Projections
 S'.Structures = S.Structures
 ```
 
@@ -3683,31 +3794,216 @@ whnf(S', Proj(Sigma, 1, Const pair0)) = App(Const choosePred, Const zero)
 
 **评论：** delta 展开把 `Const pair0` 变成 body（`p_core`），然后 `Proj` 按字段位置取出对应分量。
 
-### 19.5 Prod 的 whnf 例子（简略）
+### 19.5 Prod 的 whnf 例子
 
-沿用状态 `S`（其中 `Prod` 通过 StructureCmd 定义）。令 `pair_prod = (Const Prod.mk) (Const Nat) (App(Const Pred, Const zero)) (Const zero) (App(Const choosePred, Const zero))`（注意 `B = Pred zero`）。
+**前置状态**
+
+沿用之前的状态 `S`（其中 `Prod` 和 `Prod.mk` 在 `Axioms` 中，`Prod` 在 `Structures` 中 — 前者通过 StructureCmd 定义，见 §17.2）。
+
+令 `pair_prod` 表示：
+
+```text
+pair_prod = (Const Prod.mk) (Const Nat) (App(Const Pred, Const zero)) (Const zero) (App(Const choosePred, Const zero))
+```
+
+即：
+
+```text
+pair_prod = App(App(App(App(Const Prod.mk, Const Nat), App(Const Pred, Const zero)), Const zero), App(Const choosePred, Const zero))
+```
+
+注意第二类型参数 `B = App(Const Pred, Const zero)`（而非 `Const Nat`）。这样 `b : B = choosePred zero : Pred zero` 是类型正确的。如果取 `B = Const Nat`，则第二个分量必须是 `Nat` 的元素（如 `Const zero`），而 `choosePred zero : Pred zero` 不是 `Nat` — 这会导致类型错误。
+
+**例子 1：** `whnf(S, Proj(Prod, 0, pair_prod))`
+
+**推导过程：**
+
+1. `t = Proj(Prod, 0, pair_prod)`，匹配 `Proj` 分支 (§12)。
+
+2. 先化简 target：
+
+   ```text
+   whnf(S, pair_prod) = pair_prod
+   ```
+
+   `pair_prod` 是以 `Const Prod.mk` 为头部的嵌套 `App`。`Prod.mk` 是 axiom（不在 `S.Defs` 中），所以不能 delta 展开。函数部分是 `Const Prod.mk`，不是 `Lam`，不触发 beta reduction。所以 `whnf(S, pair_prod) = pair_prod`。
+
+3. 查结构信息：
+
+   ```text
+   S.Structures.get(Prod)
+   =
+   StructureInfo(
+     typeName = Prod,
+     constructor = Prod.mk,
+     params=[A, B],
+     fields=[(a, Var A), (b, Var B)]
+   )
+   ```
+
+   结构信息存在，且 `index = 0 < len(fields) = 2` ✓
+
+4. 拆开应用：
+
+   ```text
+   collect_app(pair_prod)
+   =
+   Pair(
+     Const Prod.mk,
+     [Const Nat, App(Const Pred, Const zero), Const zero, App(Const choosePred, Const zero)]
+   )
+   ```
+
+5. `head = Const Prod.mk`，与结构信息中的 `constructor = Prod.mk` 一致 ✓
+
+6. `expected_arity = len(params) + len(fields) = 2 + 2 = 4 = len(args)` ✓
+
+7. 当前投影 index 是 `0`，所以字段位置是：
+
+   ```text
+   field_pos = len(params) + 0 = 2 + 0 = 2
+   ```
+
+   参数列表第 `2` 个参数是 `Const zero`。
+
+8. 返回 `whnf(S, Const zero) = Const zero`（`zero` 是 axiom，不再展开）。
 
 **结论：**
 
 ```text
 whnf(S, Proj(Prod, 0, pair_prod)) = Const zero
+```
+
+**例子 2：** `whnf(S, Proj(Prod, 1, pair_prod))`
+
+**推导过程：**
+
+1-6 同例子 1（结构信息相同，target 相同，拆开应用相同）。
+
+7. 当前投影 index 是 `1`，所以字段位置是：
+
+   ```text
+   field_pos = len(params) + 1 = 2 + 1 = 3
+   ```
+
+   参数列表第 `3` 个参数是 `App(Const choosePred, Const zero)`。
+
+8. 返回 `whnf(S, App(Const choosePred, Const zero)) = App(Const choosePred, Const zero)`（`choosePred` 是 axiom，不是 `Lam`，不触发 beta reduction）。
+
+**结论：**
+
+```text
 whnf(S, Proj(Prod, 1, pair_prod)) = App(Const choosePred, Const zero)
 ```
 
-**评论：** 同一个 `whnf` 机制无需任何代码更改即可处理 Sigma（依值）和 Prod（非依值）— 参数数量和字段位置由 `StructureInfo` 的 `params` 和 `fields` 决定。
+**评论：** 注意 Prod 的第二字段类型是 `Pred zero`（而非 `Nat`）。`whnf` 只按位置取字段值，不关心字段类型 — 类型正确性由 `infer_type` 保证。
 
-### 19.6 Point 的 whnf 例子（简略）
+**评论：** 这表明同一个 `whnf` 机制无需任何代码更改即可处理 Sigma（依值）和 Prod（非依值）。唯一的区别在于参数数量和字段位置，而这些由 `StructureInfo` 的 `params` 和 `fields` 决定 — 机制本身完全一般。
 
-在状态 `S` 基础上执行 StructureCmd Point（§15b.3），得到 `S'`。令 `pt_nat = Point.mk Nat zero zero : Point Nat`。
+### 19.6 Point 的 whnf 例子
+
+**前置状态**
+
+在状态 `S` 的基础上，执行 `StructureCmd Point Point.mk params=[X : SSort 0] fields=[x : SVar X, y : SVar X]`（完整推导见 §17.3），得到状态 `S'`：
+
+```text
+S'.Axioms = S.Axioms ∪ {
+  Point    : Π (X : Sort 0), Sort 0,
+  Point.mk : Π (X : Sort 0), Π (x : X), Π (y : X), Point X
+}
+S'.Defs = S.Defs
+S'.Structures = S.Structures ∪ {
+  Point : StructureInfo(Point, Point.mk,
+    params=[ParamInfo(X, Sort(level 0))],
+    fields=[FieldInfo(x, Var X), FieldInfo(y, Var X)])
+}
+```
+
+令 `pt_nat` 表示：
+
+```text
+pt_nat = (Const Point.mk) (Const Nat) (Const zero) (Const zero)
+```
+
+即 `Point.mk Nat zero zero : Point Nat`。类型正确：`X = Nat`，`x = zero : Nat`，`y = zero : Nat`。
+
+**例子 1：** `whnf(S', Proj(Point, 0, pt_nat))`
+
+**推导过程：**
+
+1. `t = Proj(Point, 0, pt_nat)`，匹配 `Proj` 分支 (§12)。
+
+2. 先化简 target：
+
+   ```text
+   whnf(S', pt_nat) = pt_nat
+   ```
+
+   `pt_nat` 是以 `Const Point.mk` 为头部的嵌套 `App`。`Point.mk` 是 axiom（不在 `S'.Defs` 中），不能 delta 展开。函数部分是 `Const Point.mk`，不是 `Lam`，不触发 beta reduction。
+
+3. 查结构信息：
+
+   ```text
+   S'.Structures.get(Point)
+   =
+   StructureInfo(
+     typeName    = Point,
+     constructor = Point.mk,
+     params = [ParamInfo(X, Sort(level 0))],
+     fields = [FieldInfo(x, Var X), FieldInfo(y, Var X)]
+   )
+   ```
+
+   结构信息存在，且 `index = 0 < len(info.fields) = 2` ✓
+
+4. 拆开应用：
+
+   ```text
+   collect_app(pt_nat)
+   = Pair(Const Point.mk, [Const Nat, Const zero, Const zero])
+   ```
+
+5. `head = Const Point.mk`，与 `constructor = Point.mk` 一致 ✓
+
+6. 当前投影 index 是 `0`，所以字段位置是：
+
+   ```text
+   field_pos = len(info.params) + 0 = 1 + 0 = 1
+   ```
+
+7. 参数列表第 `1` 个参数是 `Const zero`。
+
+8. 返回 `whnf(S', Const zero) = Const zero`。
 
 **结论：**
 
 ```text
 whnf(S', Proj(Point, 0, pt_nat)) = Const zero
+```
+
+**例子 2：** `whnf(S', Proj(Point, 1, pt_nat))`
+
+**推导过程：**
+
+1-6 同例子 1。
+
+7. 当前投影 index 是 `1`，所以字段位置是：
+
+   ```text
+   field_pos = len(info.params) + 1 = 1 + 1 = 2
+   ```
+
+8. 参数列表第 `2` 个参数是 `Const zero`。
+
+9. 返回 `whnf(S', Const zero) = Const zero`。
+
+**结论：**
+
+```text
 whnf(S', Proj(Point, 1, pt_nat)) = Const zero
 ```
 
-Point 有 1 个参数和 2 个字段，`field_pos = 1 + index`；Sigma 有 2 个参数和 2 个字段，`field_pos = 2 + index`。`whnf` 机制完全由 `StructureInfo` 的参数和字段数量驱动，不需要任何代码修改。
+**评论：** Point 有 1 个参数和 2 个字段，所以 `field_pos = 1 + index`。而 Sigma 有 2 个参数和 2 个字段，`field_pos = 2 + index`。Prod 有 2 个参数和 2 个字段，`field_pos = 2 + index`。`whnf` 机制完全由 `StructureInfo` 的参数和字段数量驱动，不需要任何代码修改。
 
 ---
 
@@ -3721,7 +4017,7 @@ Point 有 1 个参数和 2 个字段，`field_pos = 1 + index`；Sigma 有 2 个
 
 **推导过程**
 
-由 `Proj` 的 `infer_type` 规则 (§14)：
+由 `Proj` 的 `infer_type` 规则 (§14.3)：
 
 ```text
 infer_type(S, ∅, Proj(Sigma, 1, p_core)) = App(Bfun, Proj(Sigma, 0, p_core))
@@ -3794,41 +4090,205 @@ check_type(S', ∅, Proj(Sigma, 1, Const pair0), App(Const Pred, Const zero)) = 
 
 **评论：** `defeq` 在比较参数部分时调用了 `whnf`，`whnf` 做了 delta 展开（`Const pair0` → body → `p_core`）和 Proj 投影化简（`Proj(Sigma, 0, p_core)` → `Const zero`）。
 
-### 20.4 Prod 的 infer_type + defeq（简略）
+### 20.4 Prod 的 infer_type + defeq
 
-沿用状态 `S`。令 `pair_prod = (Const Prod.mk) (Const Nat) (App(Const Pred, Const zero)) (Const zero) (App(Const choosePred, Const zero))`（注意 `B = Pred zero`）。
+**前置状态**
+
+沿用之前的状态 `S`（其中 `Prod` 和 `Prod.mk` 在 `Axioms` 中，`Prod` 在 `Structures` 中 — 前者通过 StructureCmd 定义，见 §17.2）。
+
+令 `pair_prod` 表示 §19.5 中定义的 Prod.mk 应用：
+
+```text
+pair_prod = (Const Prod.mk) (Const Nat) (App(Const Pred, Const zero)) (Const zero) (App(Const choosePred, Const zero))
+```
+
+注意 `B = App(Const Pred, Const zero)`，所以 `b = choosePred zero : Pred zero = B`，类型正确。
+
+**例子 1：** `infer_type(S, ∅, Proj(Prod, 0, pair_prod))`
+
+1. `t = Proj(Prod, 0, pair_prod)`，匹配 `Proj` 分支（见 §14.3 `infer_type`）。
+
+2. 查结构信息：
+
+```text
+info = S.Structures.get(Prod)
+= StructureInfo(Prod, Prod.mk, [
+    ParamInfo(A, Sort(level 0)),
+    ParamInfo(B, Sort(level 0))
+  ], [
+    FieldInfo(a, Var A),
+    FieldInfo(b, Var B)
+  ])
+```
+
+`index = 0 < len(info.fields) = 2` ✓
+
+3. 推断 target 类型：
+
+```text
+infer_type(S, ∅, pair_prod) = App(App(Const Prod, Const Nat), App(Const Pred, Const zero))
+```
+
+（`pair_prod` 是 `Prod.mk` 的四参数应用；`Prod.mk` 的类型是嵌套 Π，四参数依次应用后最终返回 `(Const Prod) (Var A) (Var B) = App(App(Const Prod, Const Nat), App(Const Pred, Const zero))`。）
+
+4. 匹配结构类型：
+
+```text
+match_structure_type(S, Prod, App(App(Const Prod, Const Nat), App(Const Pred, Const zero)))
+```
+
+`whnf` 后 `head = Const Prod`，`args = [Const Nat, App(Const Pred, Const zero)]`。`len(args) = 2 = len(info.params)` ✓。返回 `[Const Nat, App(Const Pred, Const zero)]`。
+
+5. 计算投影类型：
+
+```text
+projection_type(S, ∅, info, 0, pair_prod, [Const Nat, App(Const Pred, Const zero)])
+```
+
+`fields[0].type = Var A`
+
+替换：`[(A, Const Nat), (B, App(Const Pred, Const zero))]`
+
+`subst_many(Var A, [(A, Const Nat), (B, App(Const Pred, Const zero))]) = Const Nat`
+
+6. 返回 `Const Nat`。
 
 **结论：**
 
 ```text
 infer_type(S, ∅, Proj(Prod, 0, pair_prod)) = Const Nat
+```
+
+**例子 2：** `infer_type(S, ∅, Proj(Prod, 1, pair_prod))`
+
+1-4 同例子 1。
+
+5. 计算投影类型：
+
+```text
+projection_type(S, ∅, info, 1, pair_prod, [Const Nat, App(Const Pred, Const zero)])
+```
+
+`fields[1].type = Var B`（**非依值** — 与 Sigma 的 `App(Var B, Var a)` 不同）
+
+替换：`[(A, Const Nat), (B, App(Const Pred, Const zero))]`
+
+`subst_many(Var B, [(A, Const Nat), (B, App(Const Pred, Const zero))]) = App(Const Pred, Const zero)`
+
+6. 返回 `App(Const Pred, Const zero)`。
+
+**结论：**
+
+```text
 infer_type(S, ∅, Proj(Prod, 1, pair_prod)) = App(Const Pred, Const zero)
 ```
 
-**评论：** 对比 Sigma 的第二投影类型 — `App(Bfun, Proj(Sigma, 0, p_core))`（依值，依赖第一投影）。而 Prod 的第二投影类型是 `App(Const Pred, Const zero)`（非依值，只是 `Var B` 替换后的结果）。这个区别完全由 `FieldInfo.type` 模板决定 — Sigma 用 `App(Var B, Var a)`，Prod 用 `Var B`。
+**评论：** 对比 Sigma 的 `Proj(Sigma, 1, p_core)` 的类型推断结果 — `App(Bfun, Proj(Sigma, 0, p_core))`（依值：第二字段类型依赖第一投影）。而 Prod 的 `Proj(Prod, 1, pair_prod)` 的推断结果是 `App(Const Pred, Const zero)`（非依值：第二字段类型只是 `Var B`，替换后是第二个参数值 `App(Const Pred, Const zero)`，不依赖第一投影）。这个区别完全由 `FieldInfo.type` 模板决定 — Sigma 用 `App(Var B, Var a)`，Prod 用 `Var B`。`infer_type` 的代码不需要区分这两种情况。
 
-### 20.5 Point 的 infer_type + defeq（简略）
+### 20.5 Point 的 infer_type + defeq
 
-沿用 §19.6 的状态 `S'`（包含 Point）。令 `pt_nat = Point.mk Nat zero zero`。
+**前置状态**
+
+沿用 §19.6 的状态 `S'`（包含 Point 结构信息）。令 `pt_nat` 表示 §19.6 中定义的 `Point.mk Nat zero zero`。
+
+**例子 1：** `infer_type(S', ∅, Proj(Point, 0, pt_nat))`
+
+1. `t = Proj(Point, 0, pt_nat)`，匹配 `Proj` 分支（见 §14.3 `infer_type`）。
+
+2. 查结构信息：
+
+   ```text
+   info = S'.Structures.get(Point)
+   = StructureInfo(Point, Point.mk,
+     params=[ParamInfo(X, Sort(level 0))],
+     fields=[FieldInfo(x, Var X), FieldInfo(y, Var X)])
+   ```
+
+   `index = 0 < len(info.fields) = 2` ✓
+
+3. 推断 target 类型：
+
+   ```text
+   infer_type(S', ∅, pt_nat) = App(Const Point, Const Nat)
+   ```
+
+   （`pt_nat` 是 `Point.mk` 的三参数应用；`Point.mk` 的类型是 `Π (X : Sort 0), Π (x : X), Π (y : X), Point X`，三参数依次应用后返回 `Point Nat`。）
+
+4. 匹配结构类型：
+
+   ```text
+   match_structure_type(S', Point, App(Const Point, Const Nat))
+   ```
+
+   `whnf` 后 `head = Const Point`，`args = [Const Nat]`。`len(args) = 1 = len(info.params)` ✓。返回 `[Const Nat]`。
+
+5. 计算投影类型：
+
+   ```text
+   projection_type(S', ∅, info, 0, pt_nat, [Const Nat])
+   ```
+
+   `fields[0].type = Var X`
+
+   替换：`[(X, Const Nat)]`
+
+   `subst_many(Var X, [(X, Const Nat)]) = Const Nat`
+
+6. 返回 `Const Nat`。
 
 **结论：**
 
 ```text
 infer_type(S', ∅, Proj(Point, 0, pt_nat)) = Const Nat
+```
+
+**例子 2：** `infer_type(S', ∅, Proj(Point, 1, pt_nat))`
+
+1-4 同例子 1。
+
+5. 计算投影类型：
+
+   ```text
+   projection_type(S', ∅, info, 1, pt_nat, [Const Nat])
+   ```
+
+   `fields[1].type = Var X`（两个字段的类型模板相同 — 都是 `Var X`）
+
+   替换：`[(X, Const Nat)]`
+
+   `subst_many(Var X, [(X, Const Nat)]) = Const Nat`
+
+6. 返回 `Const Nat`。
+
+**结论：**
+
+```text
 infer_type(S', ∅, Proj(Point, 1, pt_nat)) = Const Nat
+```
+
+**defeq 例子：**
+
+```text
 check_type(S', ∅, Proj(Point, 0, pt_nat), Const Nat) = True
+```
+
+推导：`infer_type` 返回 `Const Nat`，与 expected type `Const Nat` 相同，`defeq` 直接比较成功 ✓。
+
+```text
 check_type(S', ∅, Proj(Point, 1, pt_nat), Const Nat) = True
 ```
 
-Point 的两个字段类型都是 `Var X`，替换 `X → Const Nat` 后都是 `Const Nat`。这比 Sigma（第二个字段依值）和 Prod（第二个字段非依值但可能不同）更简单 — `infer_type` 的 Proj 规则完全由 FieldInfo.type 模板驱动，不需要对任何特定结构硬编码。
+推导同上 ✓。
+
+**评论：** Point 的两个字段类型都是 `Var X`，替换 `X → Const Nat` 后都是 `Const Nat`。这比 Sigma（第二个字段是 `App(Var B, Var a)`，依值）和 Prod（第二个字段是 `Var B`，非依值但可能不同于第一个字段）更简单 — 两个字段类型完全相同。这再次验证了 `infer_type` 的 Proj 规则完全由 StructureInfo 的 FieldInfo.type 模板驱动，不需要对任何特定结构硬编码。
 
 ---
 
-## 21. `elab` 例子
+## 21. `elab` 例子                                               【v10 修改】
 
-本节展示 `elab` 函数的逐步推导过程，每步引用 §15a 中的规则。
+本节展示 `elab` 函数的逐步推导过程，每步引用 §15 中的规则。
 
-### 21.1 `p_ann_surf` 的 elaboration（简略）
+### 21.1 `p_ann_surf` 的完整 elaboration
 
 **输入：**
 
@@ -3839,21 +4299,90 @@ elab(S, ∅, SAnn(
 ), None)
 ```
 
-**核心步骤概述：**
+**推导过程：**
 
-1. `SAnn` 分支（§15a.6）：先 elab 类型注解 `SSigma(x, Nat, Pred x)` → `App(App(Const Sigma, Const Nat), Bfun)`，其中 `Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`。验证该类型是 Sort ✓。然后用它作为 expected type elab 内部项。
+**步骤 1：** 匹配 `SAnn` (§15.6)。
 
-2. `SPair` 分支（§15a.7）：expected type = `Sigma Nat Bfun`，`is_sigma_type` 提取 `A = Const Nat, Bfun = ...`。第一分量 `SConst zero` elab 为 `Const zero : Const Nat` ✓。第二分量 expected type = `App(Bfun, Const zero)`, elab `SApp(SConst choosePred, SConst zero)` 为 `App(Const choosePred, Const zero)`，`defeq` 验证 `App(Const Pred, Const zero)` 与 `App(Bfun, Const zero)` 相等 ✓。
+**步骤 2：** 先 elab 类型注解 `SSigma(x, SConst Nat, SApp(SConst Pred, SVar x))`。
+
+- 匹配 `SSigma` (§15.5)。
+- elab `SConst Nat` → `Const Nat` (§15.1)。验证 `infer_type(S, ∅, Const Nat) = Sort(level 0)` ✓
+- 在扩展上下文 `∅, x : Const Nat` 下，elab `SApp(SConst Pred, SVar x)`：
+  - 匹配 `SApp` (§15.2)。
+  - elab `SConst Pred` → `Const Pred` (§15.1)。
+  - `infer_type(S, ∅, Const Pred) = Forall(x, Const Nat, Sort(level 0))`。
+  - 参数 expected type 为 `Const Nat`。
+  - elab `SVar x` → `Var x` (§15.1)。
+  - `check_type(S, (∅, x : Const Nat), Var x, Const Nat) = True` ✓
+  - 返回 `App(Const Pred, Var x)`。
+- `Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`。
+- 返回 `mk_sigma_type(Const Nat, Bfun)` = `App(App(Const Sigma, Const Nat), Bfun)`。
+
+**步骤 3：** 验证类型注解是 type：
+
+```text
+infer_type(S, ∅, App(App(Const Sigma, Const Nat), Bfun)) = Sort(level 0)
+```
+
+这由 `Sigma` 的类型签名（通过 StructureCmd 定义，见 §17.1）以及连续两次 `App` 规则推出 ✓
+
+**步骤 4：** 用 `App(App(Const Sigma, Const Nat), Bfun)` 作为 expected type，elab 内部项 `SPair(SConst zero, SApp(SConst choosePred, SConst zero))`。
+
+- 匹配 `SPair` (§15.7)。
+- `expected = App(App(Const Sigma, Const Nat), Bfun)`，非空。
+- `whnf(S, expected) = App(App(Const Sigma, Const Nat), Bfun)`（以 `Const Sigma` 为头部的应用，不能化简）。
+- `is_sigma_type(expected_whnf)` 识别出：`Pair(Const Nat, Bfun)` ✓
+- 提取 `A = Const Nat, Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`。
+
+- **第一个分量**：expected type = `Const Nat`。
+  - elab `SConst zero` → `Const zero` (§15.1)。
+  - `check_type(S, ∅, Const zero, Const Nat) = True` ✓
+
+- **第二个分量**：expected type = `App(Bfun, Const zero)`。
+  - `B_at_a = App(Bfun, Const zero) = App(Lam(x, Const Nat, App(Const Pred, Var x)), Const zero)`。
+  - 这个 beta-reduce 后是 `App(Const Pred, Const zero)`。但 `elab` 不做这个化简 — 它直接用 `App(Bfun, Const zero)` 作为 expected type 传下去。`check_type` 内部的 `defeq` 会处理这个。
+  - elab `SApp(SConst choosePred, SConst zero)`：
+    - 匹配 `SApp` (§15.2)。
+    - elab `SConst choosePred` → `Const choosePred` (§15.1)。
+    - `infer_type(S, ∅, Const choosePred) = Forall(x, Const Nat, App(Const Pred, Var x))`。
+    - 参数 expected type = `Const Nat`。
+    - elab `SConst zero` → `Const zero` (§15.1)。
+    - `check_type(S, ∅, Const zero, Const Nat) = True` ✓
+    - 返回 `App(Const choosePred, Const zero)`。
+  - `check_type(S, ∅, App(Const choosePred, Const zero), App(Bfun, Const zero))`：
+    - `infer_type(S, ∅, App(Const choosePred, Const zero)) = App(Const Pred, Const zero)`（由 App 规则 + substitution）
+    - `defeq(S, ∅, App(Const Pred, Const zero), App(Bfun, Const zero))`：
+      - whnf 左边 = `App(Const Pred, Const zero)`
+      - whnf 右边 = `App(Const Pred, Const zero)`（beta reduction: `App(Lam(x, ...), Const zero)` → `App(Const Pred, Const zero)`）
+      - 两边相同 ✓
+    - 所以 `check_type = True` ✓
+
+- 返回 `mk_sigma_mk(Const Nat, Bfun, Const zero, App(Const choosePred, Const zero))`。
+
+  即：
+  ```text
+  App(App(App(App(Const Sigma.mk, Const Nat), Bfun), Const zero), App(Const choosePred, Const zero))
+  ```
+
+  这就是 `p_core`。
+
+**步骤 5：** `SAnn` 被消耗 — 返回步骤 4 的结果（不带 Ann 包装）。
 
 **最终结果：**
 
 ```text
-p_core = (Const Sigma.mk) (Const Nat) Bfun (Const zero) (App(Const choosePred, Const zero))
+elab(S, ∅, p_ann_surf, None)
+=
+p_core
+=
+(Const Sigma.mk)
+  (Const Nat)
+  (fun (x : Const Nat) => App(Const Pred, Var x))
+  (Const zero)
+  (App(Const choosePred, Const zero))
 ```
 
-其中 `Bfun = fun (x : Const Nat) => App(Const Pred, Var x)`。
-
-**评论：** 整个 elaboration 过程中，`SAnn` 被消耗了。`SSigma` 变成了 `(Const Sigma)` 的应用。`SPair` 变成了 `(Const Sigma.mk)` 的应用。输出的 CoreTerm 中没有 `Ann`、没有专门的 Sigma 构造子 — 只有 `Const`、`App`、`Lam` 和 `Var`。
+**评论：** 整个 elaboration 过程中，`SAnn` 被消耗了。`SSigma` 变成了 `(Const Sigma)` 的应用。`SPair` 变成了 `(Const Sigma.mk)` 的应用。输出的 CoreTerm 中没有 `Ann`、没有 `CSigma`、没有 `CPairTyped` — 只有 `Const`、`App`、`Lam` 和 `Var`。
 
 ### 21.2 `SPair` 在没有 expected type 时失败
 
@@ -3865,22 +4394,44 @@ elab(S, ∅, SPair(SConst zero, SConst zero), None)
 
 **推导过程：**
 
-1. 匹配 `SPair` (§15a.7)。
+1. 匹配 `SPair` (§15.7)。
 2. `expected = None`。
 3. **raise Error** — `SPair` 没有 expected type，无法 elaborate。
 
 **评论：** 这和 Lean 的行为一致：裸 `⟨a, b⟩` 不能没有类型上下文地 elaboration。用户必须提供类型标注或把它放在已知目标类型的位置中。
 
-### 21.3 `SFst(SSnd(p_ann_surf))` 失败（简略）
+### 21.3 `SFst(SSnd(p_ann_surf))` 的 elaboration
 
-尝试 `elab(S, ∅, SFst(SSnd(p_ann_surf)), None)`：
+**输入：**
 
-- `SSnd(p_ann_surf)` → `Proj(Sigma, 1, p_core)`
-- `infer_type(S, ∅, Proj(Sigma, 1, p_core))` = `App(Bfun, Proj(Sigma, 0, p_core))`
-- `whnf` beta-reduce 后 = `App(Const Pred, Proj(Sigma, 0, p_core))`
-- 这不是 Sigma 类型 → `is_sigma_type` 返回 None → **Error**
+```text
+elab(S, ∅, SFst(SSnd(p_ann_surf)), None)
+```
 
-**评论：** `fst(snd pair)` 在此例中确实没有意义 — `snd pair` 的类型不是 pair 类型。`whnf` 不化简参数位置的 `Proj`，`defeq` 能证明 `Proj(Sigma, 0, p_core) = Const zero`，但那不影响 `is_sigma_type` 的判定。
+其中 `p_ann_surf` 如 §21.1。
+
+**推导过程：**
+
+1. 匹配 `SFst` (§15.8)。递归 elab 内部项 `SSnd(p_ann_surf)`。
+
+2. elab `SSnd(p_ann_surf)`：
+   - 匹配 `SSnd` (§15.9)。递归 elab `p_ann_surf`。
+   - elab `p_ann_surf` = `SAnn(SPair(...), SSigma(...))` → `p_core` (§21.1 已证)。
+   - `infer_type(S, ∅, p_core)`：
+     - `p_core` 是 `App(App(App(App(Const Sigma.mk, ...), ...), ...), ...)`。
+     - 连续使用 `App` 规则，从 `Sigma.mk` 的类型签名推得：`App(App(Const Sigma, Const Nat), Bfun)`。
+   - `is_sigma_type(App(App(Const Sigma, Const Nat), Bfun)) = Pair(Const Nat, Bfun)` ✓
+   - 返回 `Proj(Sigma, 1, p_core)`。
+
+3. 回到 `SFst`：
+   - `t_c = Proj(Sigma, 1, p_core)`。
+   - `infer_type(S, ∅, Proj(Sigma, 1, p_core)) = App(Bfun, Proj(Sigma, 0, p_core))`。
+   - `whnf(S, App(Bfun, Proj(Sigma, 0, p_core)))` beta-reduce 后 = `App(Const Pred, Proj(Sigma, 0, p_core))`。
+   - 注意：`whnf` **不会**进一步化简参数位置的 `Proj(Sigma, 0, p_core)`（见 §14.1 的讨论）。虽然 `defeq` 可以证明 `Proj(Sigma, 0, p_core)` 与 `Const zero` definitionally equal，但 `whnf` 只处理头部。
+   - 因此该类型的 whnf 是 `App(Const Pred, Proj(Sigma, 0, p_core))`，不是 Sigma 类型（`is_sigma_type` 返回 None）。
+   - **raise Error**。
+
+**评论：** `SFst(SSnd(p_ann_surf))` 会 elaboration 失败 — 因为 `Proj(Sigma, 1, p_core)` 的类型是 `App(Const Pred, ...)`，不是 Sigma 类型。`SFst` 要求参数类型是 Sigma 类型。这个行为是正确的：`fst (snd pair)` 在这个例子中确实没有意义（`snd pair` 的类型不是 pair 类型）。无论 `defeq` 能否进一步证明该类型等于 `App(Const Pred, Const zero)`，它都不是 Sigma 类型，所以不影响结论。
 
 ### 21.4 Prod 在 elab 层的限制
 
@@ -3892,153 +4443,91 @@ elab(S, ∅, SPair(SConst zero, SConst zero), None)
 pair_prod = (Const Prod.mk) (Const Nat) (App(Const Pred, Const zero)) (Const zero) (App(Const choosePred, Const zero))
 ```
 
-这相当于"绕过 elab，直接写 kernel 层的 term"。在实际的 Lean 中，用户写 `⟨a, b⟩` 或 `(a, b)` 这样的语法，elaborator 会根据 expected type 决定是 `Sigma.mk` 还是 `Prod.mk` 的应用。当前模型中 Sigma 和 Prod 都通过 StructureCmd 定义，但 `elab` 仍然只有 Sigma 的 surface 语法 — 要支持其他结构的 surface 语法，需要新增 SurfaceTerm 构造子或通用的 anonymous constructor 机制。
+这相当于"绕过 elab，直接写 kernel 层的 term"。在实际的 Lean 中，用户写 `⟨a, b⟩` 或 `(a, b)` 这样的语法，elaborator 会根据 expected type 决定是 `Sigma.mk` 还是 `Prod.mk` 的应用。v9 中 Sigma 和 Prod 都通过 StructureCmd 定义，但 `elab` 仍然只有 Sigma 的 surface 语法 — 要支持其他结构的 surface 语法，需要新增 SurfaceTerm 构造子或通用的 anonymous constructor 机制。
 
-**评论：** `StructureCmd` 解决了"声明结构"的问题（包括 Sigma 和 Prod），但 `elab` 仍然只对 Sigma 有 surface 语法（`SSigma`/`SPair`/`SFst`/`SSnd`）。v10 新增了通用的投影语法（`SProj`/`SDot`），但通用的匿名构造子语法（`⟨a, b⟩` 泛化到所有结构）仍是后续版本的工作。Kernel 层对任何在 `S.Structures` 中注册的结构都适用 — 不需要代码修改。
+**评论：** v9 的 `StructureCmd` 解决了"声明结构"的问题（包括 Sigma 和 Prod），但 `elab` 仍然只对 Sigma 有 surface 语法（`SSigma`/`SPair`/`SFst`/`SSnd`）。Kernel 层（`whnf`、`infer_type`、`defeq`）对任何在 `S.Structures` 中注册的结构都适用 — 不需要代码修改。但 surface 层的自定义结构语法是后续版本的工作。
 
-### 21.5 SProj 例子                                              【v10 新增】
 
-展示 `SProj(projectionName, target)` 的 elaboration。
+### 21.5 `SProj` 的 elaboration                              【v10 新增】
 
-**例子 1：** `SProj(Sigma.a, SVar p)` — 用投影名访问 Sigma 的第一字段。
-
-前提：`S` 是 §15 构建的状态，`Γ = ∅, p : Sigma (Const Nat) Bfun`（其中 `Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`）。
+**输入：**
 
 ```text
-elab(S, Γ, SProj(Sigma.a, SVar p), None)
+Γp = Context(Types = {
+  p : App(App(Const Sigma, Const Nat), Bfun)
+})
+
+elab(S, Γp, SProj(Sigma.a, SVar p), None)
 ```
 
-匹配 `SProj` (§15a.10)：
+即用户写 `Sigma.a p`，并且上下文已知 `p : Sigma Nat Bfun`。
 
-1. `projectionName = Sigma.a`
-2. `S.Projections.get(Sigma.a) = ProjectionInfo(Sigma.a, Sigma, 0)`
-3. `structName = Sigma, index = 0`
-4. elab `SVar p` → `Var p`（假设 `Γ = ∅, p : Sigma (Const Nat) Bfun`）
-5. `infer_type(S, Γ, Var p) = Sigma (Const Nat) Bfun`
-6. `whnf(S, Sigma (Const Nat) Bfun)` — 以 `Const Sigma` 为头部，不能化简
-7. `match_structure_type(S, Sigma, Sigma (Const Nat) Bfun)` — collect_app → `(Const Sigma, [Const Nat, Bfun])`，len(params) = 2 ✓
-8. 返回 `Proj(Sigma, 0, Var p)`
+**推导过程：**
 
-结果：`SProj(Sigma.a, SVar p)` → `Proj(Sigma, 0, Var p)` ✓
+1. 匹配 `SProj`（§15.10），先 elaborate target：`SVar p → Var p`。
 
-**验证：** `infer_type(S, Γ, Proj(Sigma, 0, Var p))` 通过 `projection_type` 计算：
-- `fields[0].type = Var A`，替换 `A → Const Nat` → `Const Nat`
-- 所以 `Proj(Sigma, 0, Var p) : Const Nat` ✓
+2. 用完整投影名 `Sigma.a` 查询：
 
-**例子 2：** `SProj(Sigma.b, SVar p)` — 用投影名访问 Sigma 的第二字段（依值）。
+   ```text
+   S.Projections.get(Sigma.a)
+   = ProjectionInfo(Sigma.a, Sigma, 0)
+   ```
 
-延续例子 1 的 Γ（`Γ = ∅, p : Sigma (Const Nat) Bfun`）。
+3. 从 `ProjectionInfo` 取出 `structName = Sigma`、`fieldIndex = 0`，返回：
+
+   ```text
+   Proj(Sigma, 0, Var p)
+   ```
+
+**结论：** `SProj` 直接通过完整投影名取得结构名和字段下标，不需要从 target 类型反推出结构名。若 target 是需要 expected type 的裸 `SPair`，用户仍须先用 `SAnn` 标注该 target。
+
+### 21.6 `SDot` 的 elaboration                                【v10 新增】
+
+**输入：**
 
 ```text
-elab(S, Γ, SProj(Sigma.b, SVar p), None)
+elab(S, Γp, SDot(SVar p, a), None)
 ```
 
-匹配 `SProj` (§15a.10)：
+沿用 §21.5 的 `Γp`。
 
-1. `S.Projections.get(Sigma.b) = ProjectionInfo(Sigma.b, Sigma, 1)`
-2. `structName = Sigma, index = 1`
-3. elab `SVar p` → `Var p`
-4. `match_structure_type(S, Sigma, ...)` → `[Const Nat, Bfun]`
-5. 返回 `Proj(Sigma, 1, Var p)`
+**推导过程：**
 
-结果：`SProj(Sigma.b, SVar p)` → `Proj(Sigma, 1, Var p)` ✓
+1. 匹配 `SDot`（§15.11）。先 elab target `SVar p` → `Var p`。
 
-**验证：** `infer_type(S, Γ, Proj(Sigma, 1, Var p))` = `App(Bfun, Proj(Sigma, 0, Var p))`，其中 `Bfun = Lam(x, Const Nat, App(Const Pred, Var x))`。该类型 beta-reduce 后为 `App(Const Pred, Proj(Sigma, 0, Var p))` ✓
-注意不能直接化简为 `App(Const Pred, Var p)` — `Var p` 的类型是 `Sigma (Const Nat) Bfun`，不是 `Const Nat`。只有当 p 是具体构造子项时，才能进一步由 `whnf` 化简 `Proj(Sigma, 0, p_core) → Const zero`
+2. 推断 target 类型：`infer_type(S, Γ, Var p) = App(App(Const Sigma, Const Nat), Bfun)`。
 
-**例子 3：** `SProj(Sigma.a, SVar q)` — target 类型不匹配（错误情况）。
+3. whnf 后 `collect_app` 拆出 `head = Const Sigma`，`structName = Sigma`。
 
-假设 `Γ = ∅, q : Prod (Const Nat) (Const Nat)`。
+4. `Sigma.a` → `S.Projections.get(Sigma.a)` → `ProjectionInfo(Sigma.a, Sigma, 0)`。
 
-```text
-elab(S, Γ, SProj(Sigma.a, SVar q), None)
-```
+5. 返回 `Proj(Sigma, 0, Var p)`。
 
-1. `S.Projections.get(Sigma.a) = ProjectionInfo(Sigma.a, Sigma, 0)` → structName = Sigma
-2. elab `SVar q` → `Var q`
-3. `match_structure_type(S, Sigma, Prod (Const Nat) (Const Nat))` → collect_app → `(Const Prod, [Const Nat, Const Nat])`
-4. head 是 `Const Prod` ≠ `Const Sigma` → 返回 None → **Error** ✓
+**结论：** `SDot` 从 target 的类型推断结构名，其余与 `SProj` 相同。
 
-正确行为：`Sigma.a` 指向 Sigma 的字段，但 `q : Prod ...` — 结构不匹配。
+**评论（SProj vs SDot）：** `SProj` 需要用户写出完整投影名（`Sigma.a p`），更显式但不需要从 target 类型推断结构名；`SDot`（`p.a`）更简洁，但要求 target 的类型能够推断出结构名。两者 elaboration 后产生相同的 `Proj`。
 
-### 21.6 SDot 例子                                              【v10 新增】
-
-展示 `SDot(target, fieldName)` 的 elaboration — 通过类型推断确定结构。
-
-**例子 1：** `SDot(p, a)` — `p : Sigma A B`，推断出 a 属于 Sigma。
-
-前提：`Γ = ∅, p : Sigma (Const Nat) Bfun`。
-
-```text
-elab(S, Γ, SDot(SVar p, a), None)
-```
-
-匹配 `SDot` (§15a.11)：
-
-1. `target_s = SVar p, fieldName = a`
-2. elab `SVar p` → `Var p`
-3. `infer_type(S, Γ, Var p)` → `Sigma (Const Nat) Bfun`
-4. `whnf(S, Sigma (Const Nat) Bfun)` — 以 `Const Sigma` 为头部
-5. `collect_app(Sigma (Const Nat) Bfun)` → `(Const Sigma, [Const Nat, Bfun])`
-6. `head = Const Sigma`, `structName = Sigma`
-7. `S.Structures.get(Sigma)` → StructureInfo(Sigma, Sigma.mk, params=[A, B], fields=[(a, Var A), (b, App(Var B, Var a))])
-8. `len(args) = 2 = len(params)` ✓（完全应用）
-9. 查找 `fieldName = a`：`fields[0].name = a` → `index = 0`
-10. 返回 `Proj(Sigma, 0, Var p)`
-
-结果：`SDot(SVar p, a)` → `Proj(Sigma, 0, Var p)` ✓
-
-**与 SProj 的对比：** `SProj(Sigma.a, SVar p)` 和 `SDot(SVar p, a)` 产生相同的结果 `Proj(Sigma, 0, Var p)`。区别在于 SProj 用投影名直接指明结构（`Sigma.a` → Sigma），SDot 用字段名需要推断（`a` → 从 p 的类型推断出 Sigma）。
-
-**例子 2：** Point 的 dot notation。
-
-前提：先执行 StructureCmd Point（见 §15b.3），得到 Point 的 StructureInfo 和 ProjectionInfo：
-- `Point.x ↦ ProjectionInfo(Point.x, Point, 0)`
-- `Point.y ↦ ProjectionInfo(Point.y, Point, 1)`
-
-假设 `Γ = ∅, p : Point (Const Nat)`。
-
-```text
-elab(S', Γ, SDot(SVar p, x), None)
-```
-
-（S' 是扩展后的状态，包含 Point）
-
-1. elab `SVar p` → `Var p`
-2. `infer_type(S', Γ, Var p)` → `Point (Const Nat)`
-3. `collect_app(Point (Const Nat))` → `(Const Point, [Const Nat])`
-4. `structName = Point`
-5. `S'.Structures.get(Point)` → StructureInfo(Point, Point.mk, params=[X], fields=[(x, Var X), (y, Var X)])
-6. `len(args) = 1 = len(params)` ✓
-7. 查找 `fieldName = x`：`fields[0].name = x` → `index = 0`
-8. 返回 `Proj(Point, 0, Var p)`
-
-结果：`SDot(SVar p, x)` → `Proj(Point, 0, Var p)` ✓
-
-**验证：** `infer_type(S', Γ, Proj(Point, 0, Var p))` 通过 `projection_type`：
-- `fields[0].type = Var X`，替换 `X → Const Nat` → `Const Nat`
-- 所以 `Proj(Point, 0, Var p) : Const Nat` ✓
-
-同样的 `SDot(SVar p, y)` → `Proj(Point, 1, Var p) : Const Nat` ✓
-
-**评论：** v10 的 `SProj` 和 `SDot` 是通用的投影语法 — 适用于所有通过 StructureCmd 声明的结构。用户不再需要知道结构名和字段下标才能写投影 — 只需要知道投影名（`Point.x`）或字段名（`x`）加上目标值的类型。Kernel 层仍然只认识 `Proj(structName, index, target)` — 投影名属于 surface/elab 层，字段编号属于 core/kernel 层。
+---
 
 ## 22. 当前阶段的边界                                         【v10 修改】
 
 当前阶段，模型包含：
 
 ```text
-SurfaceTerm 构造子：SConst, SSort, SVar, SApp, SLam, SForall, SSigma, SPair, SFst, SSnd, SProj, SDot, SAnn    【v10 新增 SProj, SDot】
+SurfaceTerm 构造子：SConst, SSort, SVar, SApp, SLam, SForall, SSigma, SPair, SFst, SSnd, SAnn, SProj, SDot   【v10 新增 SProj, SDot】
 
 CoreTerm 构造子：Const, Sort, Var, App, Lam, Forall, Proj
 
-数据类型：ParamDecl, FieldDecl, ParamInfo, FieldInfo, ProjectionInfo, StructureInfo               【v10 新增 ProjectionInfo】
+数据类型：ParamDecl, FieldDecl, ParamInfo, FieldInfo, StructureInfo, ProjectionInfo              【v10 新增 ProjectionInfo】
 
 Command 构造子：AxiomCmd, DefCmd, StructureCmd
 
-State 字段：Axioms, Defs, Structures, Projections                                                 【v10 新增 Projections】
+State 字段：Axioms, Defs, Structures, Projections                                    【v10 新增 Projections】
 
-函数：FV(CoreTerm), subst(CoreTerm), subst_many, exec, infer_type, check_type, whnf, defeq, elab, elab_raw, is_sigma_type, collect_app, match_structure_type, projection_type, make_forall_chain, make_type_app, make_structure_type, make_constructor_type, qualified_name
+函数：append_local, declaration_name_is_used, FV(CoreTerm), subst(CoreTerm), subst_simul, subst_many,
+      exec, infer_type, check_type, whnf, defeq, elab, elab_raw, is_sigma_type, collect_app,
+      match_structure_type, projection_type, make_forall_chain, make_type_app,
+      make_structure_type, make_constructor_type                         【v10 新增 append_local, declaration_name_is_used, subst_simul】
 ```
 
 类型系统特性：
@@ -4051,8 +4540,8 @@ whnf（弱头部正规化）on CoreTerm
 definitional equality（alpha-renaming + reduction + 递归比较）on CoreTerm
 conversion-based checking（check_type 用 defeq）on CoreTerm
 StructureInfo + Proj（结构信息 + 一般投影，whnf 和 infer_type 都一般化）
-StructureCmd（用户声明新结构，exec 自动生成 type constructor 类型、constructor 类型、StructureInfo、ProjectionInfo）  【v10 新增 ProjectionInfo 生成】
-ProjectionInfo + SProj/SDot（投影名 + qualified projection syntax + dot notation）               【v10 新增】
+StructureCmd（用户声明新结构，exec 自动生成 type constructor 类型、constructor 类型、StructureInfo）
+ProjectionInfo + SProj/SDot（投影元数据、完整投影名语法和 dot notation）
 ```
 
 计算规则：
@@ -4063,11 +4552,11 @@ App(Lam(x, A, body), a) → body[x := a]
 Const defName → body（delta 展开）
 ```
 
-**评论：** `Proj` 的 whnf 规则由 `StructureInfo` 中的 `constructor`、`len(params)`、`len(fields)` 驱动 — 不需要对任何特定结构硬编码投影化简。添加新结构时，只要通过 StructureCmd 注册到 `Structures` 中，`Proj` 的 whnf 规则自动适用。v10 新增的 `ProjectionInfo` 和 `SProj/SDot` 不影响 kernel — 投影名属于 surface/elab 层，字段编号属于 core/kernel 层。
+**评论：** `Proj` 的 whnf 规则由 `StructureInfo` 中的 `constructor`、`len(params)`、`len(fields)` 驱动 — 不需要对任何特定结构硬编码投影化简。添加新结构时，只要通过 StructureCmd 注册到 `Structures` 中，`Proj` 的 whnf 规则自动适用。
 
-**v10 的关键进展：** **StructureCmd 不仅生成 StructureInfo，还为每个字段自动生成 ProjectionInfo。用户可以通过 `SProj(Sigma.a, p)`（qualified projection name）或 `SDot(p, a)`（dot notation）访问结构字段，elaboration 后变成 `Proj(Sigma, 0, p_core)`。投影名不注册到 Axioms（Method A）— 它们是 elaboration 元数据，不是全局常量。Kernel 层（whnf、infer_type、defeq）无需任何修改。**
+**v9 的关键进展：** **StructureCmd 让用户可以声明新结构，exec 自动生成类型签名和 StructureInfo。v9 不预置任何结构 — Sigma 和 Prod 都通过 StructureCmd 定义。** Kernel 层（whnf、infer_type、defeq）无需任何修改即可处理新声明的结构。elab 的 Sigma 专属 surface 语法（`SSigma`/`SPair`/`SFst`/`SSnd`）仍然硬编码 — 这些语法只在 StructureCmd Sigma 执行后才可用。自定义结构的 surface 语法是后续版本的工作。
 
-注意：`(t : A) ↦ t`（Ann 擦除）不再出现在计算规则中 — `Ann` 不是 CoreTerm 构造子。`Σ (x : A), B` 也不再是计算规则的基础 — 它是记号，elaboration 后变成 `App(App(Const Sigma, A), Bfun)`。`SProj` 和 `SDot` 也不出现在计算规则中 — 它们在 elaboration 后变成 `Proj`，不留下任何 surface 层痕迹。
+注意：`(t : A) ↦ t`（Ann 擦除）不再出现在计算规则中 — `Ann` 不是 CoreTerm 构造子。`Σ (x : A), B` 也不再是计算规则的基础 — 它是记号，elaboration 后变成 `App(App(Const Sigma, A), Bfun)`。
 
 尚未加入：
 
@@ -4081,19 +4570,19 @@ InductiveCmd
 auto-generation of recursor
 universe polymorphism
 implicit arguments
-anonymous constructor for custom structures（⟨a, b⟩ 语法泛化到所有结构）
+anonymous constructor / surface syntax for custom structures (other than Sigma)
 recursive structures（StructureCmd 不支持递归：字段类型不能引用正在声明的 typeName，因为 typeName 在 field elaboration 时尚未加入 S.Axioms）
-Method B：投影名作为全局常量（有类型和 reduction rule），而非仅仅是 elaboration 元数据
 real Lean Expr
 ```
 
 v10 的定位：
 
-> v10 的核心进展是"让声明的结构有投影名和 dot notation" — StructureCmd 自动为每个字段生成 ProjectionInfo，用户可以写 `Point.x p`（qualified projection）、`p.x`（dot notation）、`Sigma.a p`、`p.a`。Kernel 不变。
+> v8 是"让 Proj 的类型推断一般化" — Sigma 和 Prod 由同一个 StructureInfo + Proj 机制处理；
+> v9 是"让所有结构都由用户声明" — StructureCmd 自动生成 StructureInfo（包括 Sigma），kernel 规则自动适用；
+> v10 是"让投影有名字、让 dot notation 工作" — ProjectionInfo + SProj + SDot。
 >
 > Kernel 层（whnf、infer_type、defeq）不变；
-> State 层新增 Projections；
-> exec 层新增 ProjectionInfo 生成（第五步）；
-> Surface 层新增 SProj 和 SDot；
-> elab 层新增 SProj 和 SDot 分支。
-> 仍然保留 SFst/SSnd（Sigma 专属语法） — SProj/SDot 是通用投影语法，两者共存。
+> Command 层新增 StructureCmd（v9）；
+> exec 层新增 StructureCmd + ProjectionInfo 自动生成（v9 + v10）；
+> Surface 层（elab）新增 SProj 和 SDot — 投影名语法和 dot notation；
+> 变量基础设施新增 subst_simul（v10）。
