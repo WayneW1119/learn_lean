@@ -37,7 +37,7 @@
 > Bool.false : Bool
 > Bool.true  : Bool
 > Bool.rec   :
->   Π (motive : Π (_ : Bool), Sort 0),
+>   Π (motive : Π (motive_arg : Bool), Sort 0),
 >   Π (case_0 : motive Bool.false),
 >   Π (case_1 : motive Bool.true),
 >   Π (target : Bool),
@@ -78,7 +78,7 @@
 >
 > **相对于 v10 的变化：**
 >
-> * §2.4：新增 recursor 后缀 `rec` 和确定性的 binder 名生成函数 `recursor_binder_name`
+> * §2.4：新增 recursor 的固定名字后缀 `rec`
 > * §5.1d–§5.1f：新增 `InductiveInfo`、`RecursorInfo` 及其 State-level invariant
 > * §5.3：`State` 新增 `Inductives` 和 `Recursors` 两个字段
 > * §6.5：新增 nullary inductive 的 recursor 类型生成函数 `make_recursor_type`
@@ -419,11 +419,9 @@ def max_level(l1 : Level, l2 : Level) -> Level:
     raise Error            # 之后再补充
 ```
 
-### 2.4 Recursor 自动生成名                                   【v11 新增】
+### 2.4 Recursor 名字后缀                                    【v11 新增】
 
-v11 需要自动生成 recursor 名和 recursor 类型内部的 binder 名。
-
-首先取一个固定的局部名：
+v11 取一个固定的局部名：
 
 ```text
 rec : LocalName
@@ -435,51 +433,8 @@ rec : LocalName
 append_local(Bool, rec) = Bool.rec
 ```
 
-对于 recursor 类型内部的 binder，定义有限的数据类型：
+这里只定义会进入全局声明名的固定后缀。recursor 类型内部的 `motive`、`target`、`case_i` 等 binder 名只由 `make_recursor_type` 使用，因此直接在 §6.5 的生成器中就地构造，不另外建立标签数据类型或全局命名函数。
 
-```text
-RecursorBinderTag
-  = MotiveTag
-  | MotiveArgTag
-  | TargetTag
-  | CaseTag(index : Nat)
-```
-
-然后具体定义：
-
-```python
-# 写作 recursor_binder_name(tag)
-def recursor_binder_name(tag : RecursorBinderTag) -> LocalName:
-    if isinstance(tag, MotiveTag):
-        return Name([NamePart("__recursor_motive")])
-
-    if isinstance(tag, MotiveArgTag):
-        return Name([NamePart("__recursor_motive_arg")])
-
-    if isinstance(tag, TargetTag):
-        return Name([NamePart("__recursor_target")])
-
-    if isinstance(tag, CaseTag):
-        i = tag.args
-        return Name([NamePart("__recursor_case_" + decimal(i))])
-
-    raise Error
-```
-
-其中 `decimal(i)` 是自然数的标准十进制字符串表示，视为底层已实现。上述字符串都非空且不含 `"."`，所以构造出的对象确实是单段 `Name`，即 `LocalName`。
-
-该函数满足：
-
-```text
-recursor_binder_name(tag₁) = recursor_binder_name(tag₂)
-⟺ tag₁ = tag₂
-```
-
-因此不同用途和不同 case 下标一定产生不同 binder 名；对同一个 tag 则总是产生相同名字。
-
-这里**不要求**自动 binder 名与所有用户可能书写的局部名互不相同。`make_recursor_type` 构造的是一个完全由系统生成的 closed telescope，其中不会嵌入用户提供的局部 binder；它只需要内部名字互不相同。若未来生成的类型需要嵌入用户 telescope，再使用 `fresh_local_name` 做 capture avoidance。
-
-确定性很重要：`make_recursor_type(info)` 对同一个 `info` 多次调用时，必须生成语法相同的 CoreTerm，而不只是 alpha-equivalent 的 CoreTerm。
 ---
 ## 3. `SurfaceTerm`
 
@@ -1114,7 +1069,7 @@ ctor_n : T
 这里的“性质”由 motive 表示：
 
 ```text
-motive : Π (_ : T), Sort 0
+motive : Π (motive_arg : T), Sort 0
 ```
 
 `motive t` 可以理解为“关于 `t : T` 想要证明或构造的类型”。它允许结果类型依赖具体的 `t`，所以 recursor 是依值的消去器，而不只是普通的分支选择函数。
@@ -1145,7 +1100,7 @@ motive target
 把这些输入按顺序组成 Π 链，就得到：
 
 ```text
-Π (motive : Π (_ : T), Sort 0),
+Π (motive : Π (motive_arg : T), Sort 0),
 Π (case_0 : motive ctor_0),
 ...
 Π (case_n : motive ctor_n),
@@ -1166,15 +1121,15 @@ def make_recursor_type(info : InductiveInfo) -> CoreTerm:
     '''
     为 nullary inductive 生成 recursor 类型：
 
-      Π (motive : Π (_ : T), Sort 0),
+      Π (motive : Π (motive_arg : T), Sort 0),
       Π (case_0 : motive ctor_0),
       ...
       Π (target : T),
         motive target
     '''
-    motiveName = recursor_binder_name(MotiveTag)
-    motiveArg  = recursor_binder_name(MotiveArgTag)
-    targetName = recursor_binder_name(TargetTag)
+    motiveName = Name([NamePart("motive")])
+    motiveArg  = Name([NamePart("motive_arg")])
+    targetName = Name([NamePart("target")])
 
     motiveType = Forall(
         motiveArg,
@@ -1185,7 +1140,7 @@ def make_recursor_type(info : InductiveInfo) -> CoreTerm:
     telescope = [Pair(motiveName, motiveType)]
 
     for i, ctorName in enumerate(info.constructors):
-        caseName = recursor_binder_name(CaseTag(i))
+        caseName = Name([NamePart("case_" + decimal(i))])
         caseType = App(Var(motiveName), Const(ctorName))
         telescope.append(Pair(caseName, caseType))
 
@@ -1204,7 +1159,7 @@ InductiveInfo(Bool, [Bool.false, Bool.true], Bool.rec)
 生成：
 
 ```text
-Π (motive : Π (_ : Bool), Sort 0),
+Π (motive : Π (motive_arg : Bool), Sort 0),
 Π (case_0 : motive Bool.false),
 Π (case_1 : motive Bool.true),
 Π (target : Bool),
@@ -1236,7 +1191,9 @@ Bool.rec motive Bool.true Bool.false target : Bool
 
 `make_recursor_type` 只负责生成上述**类型**，不负责执行分支。真正的计算行为由 §12.3 的 iota reduction 提供：target 是第 `i` 个构造子时，完整 recursor 应用规约到 `case_i`。
 
-`recursor_binder_name` 保证所有自动 binder 名互不相同，并使生成结果具有确定性。v11 的 motive 结果固定为 `Sort(level 0)`；universe-polymorphic elimination 和 large-elimination 限制留到后续版本。
+这些 binder 名都在生成器中直接构造。`motive`、`motive_arg`、`target` 和所有 `case_i` 彼此不同；不同下标的标准十进制字符串不同，所以不同 case 的名字也不同。相同 `info` 总会生成语法相同的 CoreTerm，而不只是 alpha-equivalent 的 CoreTerm。
+
+这里不要求这些名字与所有外部局部名互不相同：`make_recursor_type` 构造的是完全由系统生成的 closed telescope，不嵌入外部局部 binder。当前模型仍以 `Var(LocalName)` 表示 bound variable；以后迁移到真实 Lean 风格的 De Bruijn 表示时，这些可读名字可以直接保留为 `nameHint`，变量身份则改由 `BVar(index)` 表示。v11 的 motive 结果固定为 `Sort(level 0)`；universe-polymorphic elimination 和 large-elimination 限制留到后续版本。
 
 ### 6.6 评论
 
@@ -1939,12 +1896,13 @@ SΣ.Structures = {
 ---
 ## 11. FV 与 substitution
 
-FV（自由变量）和 substitution（替换）是 CoreTerm 上的两个基本操作，合称 term 的"变量基础设施"。
+FV（自由变量）、`local_names`（所有局部名字）和 substitution（替换）是 CoreTerm 上的基本操作，合称 term 的“变量基础设施”。
 
 - **FV(t)**：收集 term `t` 中所有未被 binder 绑定的变量名。例如 `FV(Lam(x, A, Var x)) = FV(A)`，因为 `x` 被 `Lam` 的 binder 绑定，从自由变量集中移除。
+- **local_names(t)**：收集 term `t` 中出现的所有局部名字，包括自由变量名、被绑定变量名和 binder 名。它用于选择不会撞上 term 内部 binder 的 fresh name。
 - **subst(t, x, e)**：把 `t` 中自由出现的变量 `x` 全部替换为 `e`。例如 `subst(Var x, x, Const zero) = Const zero`。
 
-两者紧密关联：subst 的 binder 分支（Lam、Forall）需要调用 FV 来判断是否需要 alpha-rename 以避免**变量捕获**。具体来说，当替换 `subst(Lam(y, A, body), x, e)` 且 `y ≠ x` 时，如果 `y` 出现在 `FV(e)` 中（即替换项 `e` 包含一个与 binder 同名的自由变量），直接替换会使得 `e` 中原本自由的 `y` 被 binder `y`"捕获"，改变其语义。此时必须先把 binder 改名为一个新名字，再进行替换。
+三者紧密关联：subst 的 binder 分支（Lam、Forall）先用 FV 判断是否需要 alpha-rename 以避免**变量捕获**，再用 `local_names` 为 alpha-renaming 选择真正不与内部 binder 冲突的新名字。具体来说，当替换 `subst(Lam(y, A, body), x, e)` 且 `y ≠ x` 时，如果 `y` 出现在 `FV(e)` 中（即替换项 `e` 包含一个与 binder 同名的自由变量），直接替换会使得 `e` 中原本自由的 `y` 被 binder `y`“捕获”，改变其语义。此时必须先把 binder 改名为一个新名字，再进行替换。
 
 ### 11.1 `FV`
 
@@ -1999,6 +1957,58 @@ FV(Forall(x, Sort(level 0), Var x)) = ∅
 FV(Proj(Sigma, 0, Var x)) = {x}
 FV(Proj(Sigma, 1, App(Const f, Var y))) = {y}
 ```
+
+### 11.2a `local_names`
+
+`FV` 会排除被 binder 绑定的名字；选择 fresh name 时只避开 `FV` 并不充分，因为新名字还可能撞上 term 内部的 binder。为此定义：
+
+```python
+# 写作 local_names(t)
+def local_names(t : CoreTerm) -> Set[LocalName]:
+    '''
+    返回 t 中出现的所有局部名字，包括 Var 名和 binder 名。
+    '''
+    if isinstance(t, Const) or isinstance(t, Sort):
+        return ∅
+
+    if isinstance(t, Var):
+        x = t.args
+        return {x}
+
+    if isinstance(t, App):
+        f, a = t.args
+        return local_names(f) ∪ local_names(a)
+
+    if isinstance(t, Lam):
+        x, A, body = t.args
+        return {x} ∪ local_names(A) ∪ local_names(body)
+
+    if isinstance(t, Forall):
+        x, A, B = t.args
+        return {x} ∪ local_names(A) ∪ local_names(B)
+
+    if isinstance(t, Proj):
+        structName, index, target = t.args
+        return local_names(target)
+
+    raise Error
+```
+
+例如：
+
+```text
+FV(Lam(x, Sort(level 0), Var x)) = ∅
+
+local_names(Lam(x, Sort(level 0), Var x)) = {x}
+```
+
+更关键的例子是：
+
+```text
+t = Lam(z, Sort(level 0), Var y)
+```
+
+此时 `z ∉ FV(t)`，但 `z ∈ local_names(t)`。如果把某个外层 binder `y` 直接改名为 `z`，原来的 `Var y` 就会被内层 `Lam(z, ...)` 捕获。因此 alpha-renaming 选择的新名字必须避开 `local_names(body)`，不能只避开 `FV(body)`。
 
 ---
 ### 11.3 substitution
@@ -2056,7 +2066,7 @@ def subst(t: CoreTerm, x: LocalName, e: CoreTerm) -> CoreTerm:
             )
 
 
-        z = fresh_local_name(FV(body) ∪ FV(e) ∪ {x, y})
+        z = fresh_local_name(local_names(body) ∪ local_names(e) ∪ {x, y})
         body1 = alpha_rename_binder(body, y, z)
         return Lam(
             z,
@@ -2084,7 +2094,7 @@ def subst(t: CoreTerm, x: LocalName, e: CoreTerm) -> CoreTerm:
             )
 
 
-        z = fresh_local_name(FV(B) ∪ FV(e) ∪ {x, y})
+        z = fresh_local_name(local_names(B) ∪ local_names(e) ∪ {x, y})
         B1 = alpha_rename_binder(B, y, z)
         return Forall(
             z,
@@ -2100,25 +2110,104 @@ def subst(t: CoreTerm, x: LocalName, e: CoreTerm) -> CoreTerm:
 
 **评论：** v7 的 subst 只需要处理 `Lam` 和 `Forall` 的 binder 捕获问题 — 7 个构造子中只有这两个有 binder。`Proj` 的 subst 只是递归替换 `target`，`structName` 和 `index` 不受替换影响。`App` 递归替换两边。v6 中 `CSigma`（binder）、`CPairTyped`（binder + 四个子 term）各需要一个完整分支，`CFst`/`CSnd` 各需要一个分支，在 v7 中全部消失。这是 v7 简化的一个核心体现。
 
-这里用了两个辅助函数（与 v6 完全相同）：
+这里具体定义两个辅助函数。
 
 ```python
 # 写作 fresh_local_name(used)
 def fresh_local_name(used : Set[LocalName]) -> LocalName:
     '''
-    返回一个不在 used 中的新局部变量名
+    确定性地返回一个不在有限集合 used 中的新局部变量名。
     '''
+    i = 0
+    while True:
+        candidate = Name([NamePart("_fresh_" + decimal(i))])
+        if candidate not in used:
+            return candidate
+        i = i + 1
 
 
 # 写作 alpha_rename_binder(t, old, new)
 def alpha_rename_binder(t : CoreTerm, old : LocalName, new : LocalName) -> CoreTerm:
     '''
-    把 t 中由当前外层 binder 绑定的 old 改名为 new
-    要求 new 不在 FV(t) 中
+    t 是某个绑定 old 的外层 binder 的 body。
+    把 t 中由该外层 binder 绑定的 old 改名为 new。
+
+    要求：
+      old != new
+      new not in local_names(t)
     '''
+    if old == new or new in local_names(t):
+        raise Error
+
+    def go(t : CoreTerm) -> CoreTerm:
+        if isinstance(t, Const) or isinstance(t, Sort):
+            return t
+
+        if isinstance(t, Var):
+            x = t.args
+            if x == old:
+                return Var(new)
+            return t
+
+        if isinstance(t, App):
+            f, a = t.args
+            return App(go(f), go(a))
+
+        if isinstance(t, Proj):
+            structName, index, target = t.args
+            return Proj(structName, index, go(target))
+
+        if isinstance(t, Lam):
+            x, A, body = t.args
+            A1 = go(A)        # x 的作用域不包含 A
+            if x == old:
+                # 内层同名 binder 遮蔽外层 old；不进入其 body
+                return Lam(x, A1, body)
+            return Lam(x, A1, go(body))
+
+        if isinstance(t, Forall):
+            x, A, B = t.args
+            A1 = go(A)        # x 的作用域不包含 A
+            if x == old:
+                return Forall(x, A1, B)
+            return Forall(x, A1, go(B))
+
+        raise Error
+
+    return go(t)
 ```
 
-当前阶段，这两个辅助函数可以先当作底层已实现。
+`fresh_local_name` 总会终止：`used` 是有限集合，而 `_fresh_0`、`_fresh_1`、……是无限多个互不相同的合法 `LocalName`。选择最小可用下标还保证相同输入产生语法相同的结果。`_fresh_` 不是禁止用户使用的保留前缀；如果某个候选名字已经在 `used` 中，函数只需继续尝试下一个。
+
+`alpha_rename_binder` 的关键是尊重遮蔽：遇到内层同名 binder 时，它仍递归处理 binder 的 domain（因为 binder 不作用于自己的 domain），但停止进入其 body。前置条件 `new ∉ local_names(t)` 则保证新名字不会撞上任何内层 binder。
+
+例如，假设传入的是某个外层 binder 的 body：
+
+```text
+alpha_rename_binder(
+  App(Var y, Lam(y, Sort(level 0), Var y)),
+  y,
+  z
+)
+```
+
+结果是：
+
+```text
+App(Var z, Lam(y, Sort(level 0), Var y))
+```
+
+第一个 `Var y` 由外层 binder 绑定，所以改成 `Var z`；内层 `Lam(y, ...)` 遮蔽了外层 `y`，所以它的 body 保持不变。
+
+**向 De Bruijn 表示迁移：** 以上定义不是要长期模拟真实 Lean 的内部变量表示，而是把当前 named representation 中不可省略的名字敏感操作集中在 §11。以后若将 CoreTerm 改为类似：
+
+```text
+Var    → BVar(index : Nat) | FVar(id : FVarId)
+Lam    → Lam(nameHint : LocalName, type : CoreTerm, body : CoreTerm)
+Forall → Forall(nameHint : LocalName, type : CoreTerm, body : CoreTerm)
+```
+
+那么 binder 的变量身份由 `BVar(index)` 决定，`nameHint` 只负责可读显示。表层 elaborator 负责把用户名字解析为正确的 `BVar` / `FVar`；kernel substitution 改为 De Bruijn index 的 lifting / instantiation；`defeq` 比较 binder body 时也不再需要 `fresh_local_name` 或 `alpha_rename_binder`。当前把这些操作集中定义，而不是散落成隐含约定，正是为了使未来替换变量表示时边界清楚。
 
 ### 11.4 例子（substitution）
 
@@ -2219,9 +2308,13 @@ def subst_simul(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) -
             for name, replacement in body_substitutions
         }
         if y in replacement_fv:
+            replacement_names = ⋃ {
+                local_names(replacement)
+                for name, replacement in body_substitutions
+            }
             used = (
-                FV(body)
-                ∪ replacement_fv
+                local_names(body)
+                ∪ replacement_names
                 ∪ {name for name, replacement in body_substitutions}
                 ∪ {y}
             )
@@ -2245,9 +2338,13 @@ def subst_simul(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) -
             for name, replacement in body_substitutions
         }
         if y in replacement_fv:
+            replacement_names = ⋃ {
+                local_names(replacement)
+                for name, replacement in body_substitutions
+            }
             used = (
-                FV(B)
-                ∪ replacement_fv
+                local_names(B)
+                ∪ replacement_names
                 ∪ {name for name, replacement in body_substitutions}
                 ∪ {y}
             )
@@ -2262,7 +2359,7 @@ def subst_simul(t : CoreTerm, substitutions : List[Pair[LocalName, CoreTerm]]) -
 
 其中 `⋃` 表示对有限集合族取并集。
 
-**评论：** schema 变量名互不重复，并不足以保证逐个替换总是正确：实际参数或 `Proj(...)` 的 target 仍可能含有与其他 schema 变量同名的自由局部变量。`subst_simul` 确保每个变量只根据原 term 的结构替换一次，替换项本身不参与本轮替换。这是 `projection_type`（§13.3）正确性的保证。
+**评论：** schema 变量名互不重复，并不足以保证逐个替换总是正确：实际参数或 `Proj(...)` 的 target 仍可能含有与其他 schema 变量同名的自由局部变量。`subst_simul` 确保每个变量只根据原 term 的结构替换一次，替换项本身不参与本轮替换。需要 alpha-rename 时，`replacement_fv` 判断是否存在捕获风险，`local_names(body)` 和 `replacement_names` 则用于选出不会撞上任何内部 binder 的新名字。这是 `projection_type`（§13.3）正确性的保证。
 
 ---
 ## 12. 计算规则：`whnf`
@@ -2919,7 +3016,13 @@ if isinstance(t1, Forall) and isinstance(t2, Forall):
     if not defeq(S, Γ, A1, A2):
         return False
 
-    z = fresh_local_name(FV(B1) ∪ FV(B2) ∪ FV(A1) ∪ FV(A2) ∪ {x1, x2})
+    used = (
+        local_names(B1) ∪ local_names(B2)
+        ∪ local_names(A1) ∪ local_names(A2)
+        ∪ dom(Γ.Types)
+        ∪ {x1, x2}
+    )
+    z = fresh_local_name(used)
     B1z = alpha_rename_binder(B1, x1, z)
     B2z = alpha_rename_binder(B2, x2, z)
 
@@ -2927,7 +3030,7 @@ if isinstance(t1, Forall) and isinstance(t2, Forall):
     return defeq(S, Γ1, B1z, B2z)
 ```
 
-**评论：** 为什么需要 alpha-renaming？因为 `Forall(x, Nat, x)` 和 `Forall(y, Nat, y)` 只是 binder 名字不同，应该相等。做法是：取一个新名字 `z`，把两个 body 的 binder 都改成 `z`，然后在扩展上下文 `Γ, z : A` 下递归比较。这样 `x` 和 `y` 都变成了 `z`，body 就能正确比较了。
+**评论：** 为什么需要 alpha-renaming？因为 `Forall(x, Nat, x)` 和 `Forall(y, Nat, y)` 只是 binder 名字不同，应该相等。做法是：取一个新名字 `z`，把两个 body 的 binder 都改成 `z`，然后在扩展上下文 `Γ, z : A` 下递归比较。这样 `x` 和 `y` 都变成了 `z`，body 就能正确比较了。`used` 使用 `local_names` 而不是只使用 `FV`，以避开 body 内部的 binder；同时包含 `dom(Γ.Types)`，避免 `expand_context` 覆盖已有的局部变量条目。
 
 `Lam` 的处理与 `Forall` 完全平行：
 
@@ -2939,7 +3042,13 @@ if isinstance(t1, Lam) and isinstance(t2, Lam):
     if not defeq(S, Γ, A1, A2):
         return False
 
-    z = fresh_local_name(FV(body1) ∪ FV(body2) ∪ FV(A1) ∪ FV(A2) ∪ {x1, x2})
+    used = (
+        local_names(body1) ∪ local_names(body2)
+        ∪ local_names(A1) ∪ local_names(A2)
+        ∪ dom(Γ.Types)
+        ∪ {x1, x2}
+    )
+    z = fresh_local_name(used)
     body1z = alpha_rename_binder(body1, x1, z)
     body2z = alpha_rename_binder(body2, x2, z)
 
@@ -2990,7 +3099,13 @@ def defeq(S : State, Γ : Context, t1 : CoreTerm, t2 : CoreTerm) -> bool:
         x2, A2, body2 = t2.args
         if not defeq(S, Γ, A1, A2):
             return False
-        z = fresh_local_name(FV(body1) ∪ FV(body2) ∪ FV(A1) ∪ FV(A2) ∪ {x1, x2})
+        used = (
+            local_names(body1) ∪ local_names(body2)
+            ∪ local_names(A1) ∪ local_names(A2)
+            ∪ dom(Γ.Types)
+            ∪ {x1, x2}
+        )
+        z = fresh_local_name(used)
         body1z = alpha_rename_binder(body1, x1, z)
         body2z = alpha_rename_binder(body2, x2, z)
         Γ1 = expand_context(Γ, z, A1)
@@ -3001,7 +3116,13 @@ def defeq(S : State, Γ : Context, t1 : CoreTerm, t2 : CoreTerm) -> bool:
         x2, A2, B2 = t2.args
         if not defeq(S, Γ, A1, A2):
             return False
-        z = fresh_local_name(FV(B1) ∪ FV(B2) ∪ FV(A1) ∪ FV(A2) ∪ {x1, x2})
+        used = (
+            local_names(B1) ∪ local_names(B2)
+            ∪ local_names(A1) ∪ local_names(A2)
+            ∪ dom(Γ.Types)
+            ∪ {x1, x2}
+        )
+        z = fresh_local_name(used)
         B1z = alpha_rename_binder(B1, x1, z)
         B2z = alpha_rename_binder(B2, x2, z)
         Γ1 = expand_context(Γ, z, A1)
@@ -3980,7 +4101,7 @@ S_v11.Axioms 额外包含：
   Bool.false : Const Bool
   Bool.true  : Const Bool
   Bool.rec   :
-    Π (motive : Π (_ : Bool), Sort 0),
+    Π (motive : Π (motive_arg : Bool), Sort 0),
     Π (case_0 : motive Bool.false),
     Π (case_1 : motive Bool.true),
     Π (target : Bool),
@@ -4084,7 +4205,7 @@ Bool.true  : Bool
 
 ```text
 Bool.rec :
-  Π (motive : Π (_ : Bool), Sort 0),
+  Π (motive : Π (motive_arg : Bool), Sort 0),
   Π (case_0 : motive Bool.false),
   Π (case_1 : motive Bool.true),
   Π (target : Bool),
@@ -4272,7 +4393,7 @@ elab(
 
 最外层 `SLam` 产生 `Lam(b, Const Bool, ...)`。内部四层 `SApp` 依次读取 `Bool.rec` 的 Π 类型：
 
-1. motive 必须具有 `Π (_ : Bool), Sort 0`，所以 `SLam(q, Bool, Bool)` 合法；
+1. motive 必须具有 `Π (motive_arg : Bool), Sort 0`，所以 `SLam(q, Bool, Bool)` 合法；
 2. `case_0` 必须具有 `motive Bool.false`，在该 motive 下定义相等于 `Bool`，所以 `Bool.true` 合法；
 3. `case_1` 必须具有 `motive Bool.true`，同样定义相等于 `Bool`，所以 `Bool.false` 合法；
 4. target 必须具有 `Bool`，所以局部变量 `b` 合法。
@@ -4301,15 +4422,16 @@ SurfaceTerm 构造子：SConst, SSort, SVar, SApp, SLam, SForall, SSigma, SPair,
 
 CoreTerm 构造子：Const, Sort, Var, App, Lam, Forall, Proj
 
-数据类型：RecursorBinderTag, ParamDecl, FieldDecl, ConstructorDecl, ParamInfo, FieldInfo,
+数据类型：ParamDecl, FieldDecl, ConstructorDecl, ParamInfo, FieldInfo,
           StructureInfo, ProjectionInfo, InductiveInfo, RecursorInfo
 
 Command 构造子：AxiomCmd, DefCmd, StructureCmd, InductiveCmd
 
 State 字段：Axioms, Defs, Structures, Projections, Inductives, Recursors
 
-函数：append_local, recursor_binder_name, declaration_name_is_used,
-      FV(CoreTerm), subst(CoreTerm), subst_simul, subst_many,
+函数：append_local, declaration_name_is_used,
+      FV(CoreTerm), local_names(CoreTerm), fresh_local_name,
+      alpha_rename_binder, subst(CoreTerm), subst_simul, subst_many,
       exec, infer_type, check_type, whnf, defeq, elab, elab_raw, is_sigma_type, collect_app,
       match_structure_type, projection_type, make_forall_chain, make_type_app,
       make_structure_type, make_constructor_type, make_recursor_type
