@@ -9,7 +9,7 @@
 ```
 总目标：学习 Lean + 类型论 + 用 Lean 做数学证明
 ├── 子目标 1：内核建模（← 你在这里）
-│   └── 从零建模 Lean 风格内核，逐版迭代 (v0→v10→...)
+│   └── 从零建模 Lean 风格内核，逐版迭代 (v0→v12→...)
 ├── 子目标 2：类型论基础
 ├── 子目标 3：Lean 实操
 └── 子目标 4：数学证明
@@ -58,6 +58,17 @@
 
 ---
 
+### 第五阶段：归纳类型与递归子 (v11–v12)
+
+| 版本 | 核心内容 | Kernel / Elab |
+|------|---------|--------------|
+| **v11** | **InductiveCmd + nullary recursor**。新增 `InductiveInfo`、`RecursorInfo`、`InductiveCmd`，自动生成 `Bool`、构造子和 `Bool.rec`。`whnf` 新增由 metadata 驱动的 nullary iota reduction。 | Command + State metadata + whnf |
+| **v12** | **constructor telescope + direct recursion**。构造子可带依值参数 telescope；`Nat.succ : Nat → Nat` 的参数被标记为直接递归参数。recursor case 自动获得 constructor arguments 和 induction hypotheses；iota reduction 自动构造 recursive calls。 | Command + richer metadata + recursive iota |
+
+**阶段总结：** v11 建立“声明归纳类型—生成 recursor—iota 计算”的最小闭环；v12 将它扩展到第一个真正递归的归纳类型 `Nat`。CoreTerm 和 SurfaceTerm 均未扩张，构造子和 recursor 仍由普通 `Const` / `App` 表示。
+
+---
+
 ## 关键设计决策
 
 ### 1. Surface/Core 分层（v6）
@@ -96,14 +107,13 @@
 
 ---
 
-## 当前架构 (v10)
+## 当前架构 (v12)
 
 ```
 ┌──────────────────────────────────────────────┐
 │                  Surface Layer               │
 │  SSigma, SPair, SFst, SSnd, SAnn             │
-│  SProj (projection name syntax)   ← v10 新增 │
-│  SDot  (dot notation)             ← v10 新增 │
+│  SProj, SDot                                 │
 │       ↓                                      │
 │     elab()                                   │
 │       ↓                                      │
@@ -114,6 +124,7 @@
 │       ↓                                      │
 │                  State Layer                  │
 │  Axioms, Defs, Structures, Projections       │
+│  Inductives, Recursors                       │
 └──────────────────────────────────────────────┘
 ```
 
@@ -137,6 +148,8 @@
 | `Defs` | 全局名字 → (类型, body) | v0 |
 | `Structures` | 结构名字 → StructureInfo | v7 |
 | `Projections` | 投影名 → ProjectionInfo | v10 |
+| `Inductives` | 归纳类型名 → InductiveInfo | v11 |
+| `Recursors` | recursor 名 → RecursorInfo | v11 |
 
 ### Command 构造子
 
@@ -145,6 +158,7 @@
 | `AxiomCmd n : A` | 声明一个类型为 A 的 axiom | v0 |
 | `DefCmd n A t` | 定义一个类型为 A、body 为 t 的 def | v0 |
 | `StructureCmd` | 声明一个新结构（type constructor + constructor + fields） | v9 |
+| `InductiveCmd` | 声明归纳类型、constructor telescopes 和自动 recursor | v11（v12 扩展） |
 
 ---
 
@@ -163,14 +177,16 @@
 | v8 | 7 | 11 | 3 | ParamInfo, FieldInfo, match_structure_type, projection_type |
 | v9 | 7 | 11 | 3 | StructureCmd, 类型生成辅助函数, 不预置任何结构 |
 | v10 | 7 | **13** | **4** | ProjectionInfo, SProj, SDot, Method A |
+| v11 | 7 | 13 | 6 | InductiveCmd, Bool.rec, nullary iota |
+| v12 | 7 | 13 | 6 | constructor telescope, Nat.rec, recursive iota |
 
 **趋势：** CoreTerm 从膨胀（v0→v2: 6→10 构造子）到精简（v6→v7: 9→7 构造子）。SurfaceTerm 持续增长以支持更丰富的用户语法。State 逐步增长以支持结构信息管理。
 
 ---
 
-## 尚未加入（v10 边界）
+## 尚未加入（v12 边界）
 
-v10 刻意不包含以下内容，它们属于后续版本的工作：
+v12 刻意不包含以下内容，它们属于后续版本的工作：
 
 ### 类型系统
 - eta 规则（对于 Π 和 Σ）
@@ -185,9 +201,10 @@ v10 刻意不包含以下内容，它们属于后续版本的工作：
 - 真正的 `Expr.proj`（带 `ProjectionInfo` 索引）
 
 ### 声明机制
-- `InductiveCmd`——归纳类型的声明（包括递归子自动生成）
 - `DefCmd` 的完整 whnf reduction rule（当前 whnf 只 delta-expand def）
 - Method B——投影名作为带类型和 reduction rule 的全局常量
+- parametric / indexed / mutual inductive
+- nested recursion 与一般 positivity checker
 
 ### 表层语法
 - 通用 anonymous constructor（`⟨a, b⟩` 语法泛化到所有结构）
@@ -201,10 +218,11 @@ v10 刻意不包含以下内容，它们属于后续版本的工作：
 
 当前阶段（内核建模）可能继续的方向：
 
-### v11 候选主题
+### 后续候选主题
 - **Method B**：投影名作为全局常量进入 Axioms，有类型和 reduction rule。需要先完善 DefCmd 的 whnf reduction
-- **InductiveCmd**：归纳类型的声明命令，包括 recursor 自动生成
 - **de Bruijn indices**：用 de Bruijn indices 替换 named representation，更接近真实 Lean 实现
+- **parametric/indexed inductive**：从 `Nat` 扩展到 `List A`、`Eq`
+- **positivity checking**：超越 v12 的直接递归参数限制
 - **eta 规则**：Π 和 Σ 的 eta 等价
 - **universe polymorphism**：Level 参数化
 
@@ -239,9 +257,11 @@ learn_lean/
     ├── lean_model_v7.md   # v7: Proj, StructureInfo, Sigma 去特殊化
     ├── lean_model_v8.md   # v8: ParamInfo, FieldInfo, 辅助函数
     ├── lean_model_v9.md   # v9: StructureCmd, 类型生成辅助函数
-    └── lean_model_v10.md  # v10: ProjectionInfo, SProj, SDot (最新)
+    ├── lean_model_v10.md  # v10: ProjectionInfo, SProj, SDot
+    ├── lean_model_v11.md  # v11: InductiveCmd, Bool.rec
+    └── lean_model_v12.md  # v12: constructor telescope, Nat.rec (最新)
 ```
 
 ---
 
-*最后更新：2026-07-19*
+*最后更新：2026-07-29*

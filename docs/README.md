@@ -1,6 +1,6 @@
 # Version Documents
 
-每个版本文档的阅读指南。版本号越大越新，v11 是当前最新版本。
+每个版本文档的阅读指南。版本号越大越新，v12 是当前最新版本。
 
 ## 阅读顺序
 
@@ -28,16 +28,18 @@
 
 11. **[v10](lean_model_v10.md)** — `ProjectionInfo` + `SProj` + `SDot`。投影名和 dot notation。
 
-12. **[v11](lean_model_v11.md)** — `InductiveCmd` + `Bool.rec` + iota reduction。最简单的 inductive 类型（nullary constructors）。当前最新。
+12. **[v11](lean_model_v11.md)** — `InductiveCmd` + `Bool.rec` + iota reduction。最简单的 inductive 类型（nullary constructors）。
+
+13. **[v12](lean_model_v12.md)** — constructor telescope + `Nat.zero` / `Nat.succ` + recursive iota。直接递归参数产生 induction hypotheses。当前最新。
 
 ## 关于版本差异标记
 
-每个版本文档在头部列出了"相对于上一版本的变化"摘要，正文中用 `【v10 新增】` / `【v10 修改】` 标记新内容。阅读原则：**只看当前版本与上一版本的差异**。
+每个版本文档在头部列出了“相对于上一版本的变化”摘要，正文中只标记当前版本的新增/修改内容。阅读原则：**只看当前版本与上一版本的差异**。
 
 ## 关于例子
 
-- 非当前版本的例子（非 v11 例子）只保留简要结论，去掉逐步推导。
-- 当前版本的新增例子（如 v11 的 `InductiveCmd`、`Bool.rec`、iota reduction）保留详细推导。
+- 非当前版本的例子（非 v12 例子）只保留简要结论，去掉逐步推导。
+- 当前版本的新增例子（如 v12 的 constructor telescope、`Nat.rec` 和 recursive iota）保留详细推导。
 
 ## 约定速览
 
